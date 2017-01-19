@@ -3,8 +3,10 @@ from optparse import make_option
 import mysql.connector
 
 class Command(BaseCommand):
-    help = """Migrates a site in Joomla to CyclopeCMS.
-    Requires the options server, database and user, password is optional.
+    help = """
+    Migrates a site in Joomla to CyclopeCMS.
+    Required params are server host name, database name and database user and password.
+    Optional params are joomla's table prefix.
     """
 
     #NOTE django > 1.8 uses argparse instead of optparse module, 
@@ -37,9 +39,9 @@ class Command(BaseCommand):
         ),
         make_option('--prefix',
             action='store',
-            dest='password',
+            dest='prefix',
             default='',
-            help='Database password'
+            help='Joomla\'s tables prefix'
         ),
     )
     
@@ -77,3 +79,13 @@ class Command(BaseCommand):
             raise
         else:
             return cnx
+    
+    def _fetch_content(self, mysql_cnx, site):
+    """Queries Joomla's _content table to populate Articles."""
+        fields = ('',)
+        query = re.sub("[()']", '', "SELECT {} FROM ".format(fields))+self.table_prefix+"content"
+        cursor = mysql_cnx.cursor()
+        cursor.execute(query)
+        # STUB
+        cursor.close()
+        
