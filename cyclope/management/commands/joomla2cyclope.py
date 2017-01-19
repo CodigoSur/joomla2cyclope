@@ -35,13 +35,28 @@ class Command(BaseCommand):
             default=None,
             help='Database password'
         ),
+        make_option('--prefix',
+            action='store',
+            dest='password',
+            default='',
+            help='Database password'
+        ),
     )
+    
+    # class constants
+    table_prefix = None
     
     def handle(self, *args, **options):
         """Joomla to Cyclope database migration logic"""
-        print "connecting to wordpress mysql database..."
+        
+        self.table_prefix = options['prefix']
+        
+        # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
+        print "connected to Joomla's MySQL database..."
+        
         # TODO todo...
+        
         #close mysql connection
         cnx.close()
         
