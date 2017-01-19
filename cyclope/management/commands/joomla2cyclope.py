@@ -1,6 +1,7 @@
 from django.core.management.base import BaseCommand, CommandError
 from optparse import make_option
 import mysql.connector
+import re
 
 class Command(BaseCommand):
     help = """
@@ -57,7 +58,7 @@ class Command(BaseCommand):
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
         print "connected to Joomla's MySQL database..."
         
-        # TODO todo...
+        self._fetch_content(cnx)
         
         #close mysql connection
         cnx.close()
@@ -80,12 +81,20 @@ class Command(BaseCommand):
         else:
             return cnx
     
-    def _fetch_content(self, mysql_cnx, site):
-    """Queries Joomla's _content table to populate Articles."""
-        fields = ('',)
+    def _fetch_content(self, mysql_cnx):
+        """Queries Joomla's _content table to populate Articles."""
+        fields = ('title', 'alias', 'introtext', 'created',)
+        # TODO state (published?), cat_id (category), created_by (user), modified (date), modified_by (user),  published_up/down (published?), images
+        # not TODO asset_id, checked_out, checked_out_time, attribs, version, ordering, metakey, metadesc, access, hits, metadata, featured, xreference
+        # TODO fulltext da error de sintaxis al select
         query = re.sub("[()']", '', "SELECT {} FROM ".format(fields))+self.table_prefix+"content"
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
-        # STUB
+
+        for content in cursor:
+            print self._tuples_to_dict(fields, content)
+        
         cursor.close()
         
+    def _tuples_to_dict(self, fields, results):
+        return dict(zip(fields, results))
