@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 from optparse import make_option
 import mysql.connector
 import re
+from cyclope.apps.articles.models import Article
 
 class Command(BaseCommand):
     help = """
@@ -83,18 +84,34 @@ class Command(BaseCommand):
     
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
-        fields = ('title', 'alias', 'introtext', 'created',)
-        # TODO state (published?), cat_id (category), created_by (user), modified (date), modified_by (user),  published_up/down (published?), images
+        fields = ('title', 'alias', 'introtext', 'created', 'modified')
+        # TODO state (published?), cat_id (category), created_by (user), modified_by (user), published_up/down (published?), images
         # not TODO asset_id, checked_out, checked_out_time, attribs, version, ordering, metakey, metadesc, access, hits, metadata, featured, xreference
-        # TODO fulltext da error de sintaxis al select
         query = re.sub("[()']", '', "SELECT {} FROM ".format(fields))+self.table_prefix+"content"
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
 
         for content in cursor:
-            print self._tuples_to_dict(fields, content)
+            content_hash = self._tuples_to_dict(fields, content)
+            article = self._content_to_article(content_hash)
+            article.save()
         
         cursor.close()
         
     def _tuples_to_dict(self, fields, results):
         return dict(zip(fields, results))
+
+    def _content_to_article(self, content):
+        """Instances an Article object from a Content hash."""
+        return Article(
+            name = content['title'],
+            #TODO alias == slug? 
+            creation_date = content['created'],
+            modification_date = content['modified'],
+#    "published" bool NOT NULL, TODO
+#    "user_id" integer, TODO blank until Users are treated
+            text = content['introtext'], # TODO fulltext?
+            date = content['created'], # TODO redundant
+#    "pretitle" varchar(250) NOT NULL, TODO introtext ?
+#    "summary" text NOT NULL, TODO TODO introtext?
+        )
