@@ -87,9 +87,12 @@ class Command(BaseCommand):
     
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
-        fields = ('title', 'alias', 'introtext', 'created', 'modified', 'state')
-        # TODO fulltext, cat_id, images, created_by
-        query = re.sub("[()']", '', "SELECT {} FROM ".format(fields))+self.table_prefix+"content"
+        # TODO cat_id, images, created_by
+        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state')
+        # we need to quote field names because fulltext is a reserved mysql keyword
+        quoted_fields = ["`{}`".format(field) for field in fields]
+        query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
+        query = re.sub("[\[\]']", '', query) # clean list and quotes syntax
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
 
@@ -105,22 +108,24 @@ class Command(BaseCommand):
 
     def _content_to_article(self, content):
         """Instances an Article object from a Content hash."""
+        
+        # Joomla's Read More feature
+        article_content = content['introtext']
+        if content['fulltext']:
+            article_content += fulltext
+        
         return Article(
             name = content['title'],
             slug = content['alias'], # or AutoSlug?
-
             creation_date = content['created'],
             modification_date = content['modified'],
-            date = content['created'], # redundant?
-
+            date = content['created'],
             # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
             published = content['state']==1,
-            
-            # TODO introtext-fulltext logic
-            summary = content['introtext'],
-            text = content['introtext'],
-            pretitle = content['introtext']
-                        
+            text = article_content,
+            #TODO redeco logic
+            #summary = content['introtext'],
+            #pretitle = content['introtext']
             #TODO import Users before
             #user_id = content['created_by']
         )
