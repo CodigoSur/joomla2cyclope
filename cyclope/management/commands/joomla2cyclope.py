@@ -7,6 +7,9 @@ from cyclope.apps.articles.models import Article
 class Command(BaseCommand):
     help = """
     Migrates a site in Joomla to CyclopeCMS.
+
+    Usage: (cyclope_workenv)$~ python manage.py joomla2cyclope --server localhost --database REDECO_JOOMLA --user root --password NEW_PASSWORD --prefix wiphala_
+
     Required params are server host name, database name and database user and password.
     Optional params are joomla's table prefix.
     """
@@ -84,9 +87,8 @@ class Command(BaseCommand):
     
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
-        fields = ('title', 'alias', 'introtext', 'created', 'modified')
-        # TODO state (published?), cat_id (category), created_by (user), modified_by (user), published_up/down (published?), images
-        # not TODO asset_id, checked_out, checked_out_time, attribs, version, ordering, metakey, metadesc, access, hits, metadata, featured, xreference
+        fields = ('title', 'alias', 'introtext', 'created', 'modified', 'state')
+        # TODO fulltext, cat_id, images, created_by
         query = re.sub("[()']", '', "SELECT {} FROM ".format(fields))+self.table_prefix+"content"
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
@@ -105,13 +107,20 @@ class Command(BaseCommand):
         """Instances an Article object from a Content hash."""
         return Article(
             name = content['title'],
-            #TODO alias == slug? 
+            slug = content['alias'], # or AutoSlug?
+
             creation_date = content['created'],
             modification_date = content['modified'],
-#    "published" bool NOT NULL, TODO
-#    "user_id" integer, TODO blank until Users are treated
-            text = content['introtext'], # TODO fulltext?
-            date = content['created'], # TODO redundant
-#    "pretitle" varchar(250) NOT NULL, TODO introtext ?
-#    "summary" text NOT NULL, TODO TODO introtext?
+            date = content['created'], # redundant?
+
+            # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
+            published = content['state']==1,
+            
+            # TODO introtext-fulltext logic
+            summary = content['introtext'],
+            text = content['introtext'],
+            pretitle = content['introtext']
+                        
+            #TODO import Users before
+            #user_id = content['created_by']
         )
