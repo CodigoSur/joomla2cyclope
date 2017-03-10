@@ -5,6 +5,9 @@ import re
 from cyclope.apps.articles.models import Article
 from cyclope.core.collections.models import Collection, Category, Categorization
 from django.contrib.contenttypes.models import ContentType
+from django.db import IntegrityError
+import operator
+from autoslug.settings import slugify
 
 class Command(BaseCommand):
     help = """
@@ -128,6 +131,7 @@ class Command(BaseCommand):
         query = re.sub("[\(\)']", '', query) # clean tuple and quotes syntax
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
+        # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
         categories = []
         for content in cursor:
             category_hash = self._tuples_to_dict(fields, content)
@@ -137,8 +141,25 @@ class Command(BaseCommand):
                 categories.append(category)
                 counter += 1
         cursor.close()
-        # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
-        Category.objects.bulk_create(categories)
+        # find duplicate names, since AutoSlugField doesn't properly preserve uniqueness in bulk.
+        try: # duplicate query is expensive, we try not to perform it if we can
+            Category.objects.bulk_create(categories)
+        except IntegrityError:
+            cursor = mysql_cnx.cursor()
+            query = "SELECT id FROM {}categories WHERE title IN (SELECT title FROM {}categories GROUP BY title HAVING COUNT(title) > 1)".format(self.table_prefix, self.table_prefix)
+            cursor.execute(query)
+            result = [x[0] for x in cursor.fetchall()]
+            cursor.close()
+            duplicates = [cat for cat in categories if cat.id in result]
+            for dup in duplicates: categories.remove(dup)
+            # sort duplicate categories by name ignoring case
+            duplicates.sort(key = lambda cat: operator.attrgetter('name')(cat).lower(), reverse=False)
+            # categories can have the same name if they're different collections, but not the same slug
+            duplicates = self._dup_categories_slugs(duplicates)
+            # categories with the same collection cannot have the same name
+            duplicates = self._dup_categories_collections(duplicates)
+            categories += duplicates
+            Category.objects.bulk_create(categories)
         # set MPTT fields using django-mptt's own method TODO
         #Category.tree.rebuild()
     
@@ -153,6 +174,31 @@ class Command(BaseCommand):
             return (1, 'Contenidos', ['article',])
         else: # We might want to create other collections for newsfeeds, etc.
             return (None, None, None)
+
+    def _dup_categories_slugs(self, categories):
+        #use a counter to differentiate them
+        counter = 2
+        for idx, category in enumerate(categories):
+            if idx == 0 :
+                category.slug = slugify(category.name)
+            else:
+                if categories[idx-1].name.lower() == category.name.lower() :
+                    category.slug = slugify(category.name) + '-' + str(counter)
+                    counter += 1
+                else:
+                    counter = 2
+                    category.slug = slugify(category.name)
+        return categories
+
+    def _dup_categories_collections(self, categories):
+        counter = 1
+        for idx, category in enumerate(categories):
+            if idx != 0 :
+                if categories[idx-1].name.lower() == category.name.lower() :
+                    if categories[idx-1].collection == category.collection :
+                        category.name = category.name + " (" + str(counter) + ")"
+                else : counter = 1
+        return categories
 
     # MODELS CONVERSION
 
