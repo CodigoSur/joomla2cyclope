@@ -3,7 +3,7 @@ from optparse import make_option
 import mysql.connector
 import re
 from cyclope.apps.articles.models import Article
-from cyclope.core.collections.models import Collection, Category
+from cyclope.core.collections.models import Collection, Category, Categorization
 from django.contrib.contenttypes.models import ContentType
 
 class Command(BaseCommand):
@@ -95,20 +95,19 @@ class Command(BaseCommand):
     
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
-        # TODO cat_id, images, created_by
-        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state')
+        # TODO images, created_by
+        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
         query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
         query = re.sub("[\[\]']", '', query) # clean list and quotes syntax
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
-
         for content in cursor:
             content_hash = self._tuples_to_dict(fields, content)
             article = self._content_to_article(content_hash)
             article.save()
-        
+            self._categorize_object(article, content_hash['catid'], 'article')
         cursor.close()
 
     def _fetch_collections(self, mysql_cnx):
@@ -137,9 +136,10 @@ class Command(BaseCommand):
             if category:
                 categories.append(category)
                 counter += 1
+        cursor.close()
         # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
         Category.objects.bulk_create(categories)
-        # set MPTT fields using django-mptt's own method
+        # set MPTT fields using django-mptt's own method TODO
         #Category.tree.rebuild()
     
     # HELPERS
@@ -204,3 +204,10 @@ class Command(BaseCommand):
                 level = category_hash['level'],
                 tree_id = counter, # TODO is this right?
             )
+    
+    def _categorize_object(self, objeto, cat_id, model):
+        Categorization.objects.create(
+            category_id = cat_id,
+            content_type_id = ContentType.objects.get(model=model).pk,
+            object_id = objeto.pk
+        )
