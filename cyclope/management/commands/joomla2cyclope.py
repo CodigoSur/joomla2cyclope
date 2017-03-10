@@ -3,6 +3,8 @@ from optparse import make_option
 import mysql.connector
 import re
 from cyclope.apps.articles.models import Article
+from cyclope.core.collections.models import Collection, Category
+from django.contrib.contenttypes.models import ContentType
 
 class Command(BaseCommand):
     help = """
@@ -62,6 +64,10 @@ class Command(BaseCommand):
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
         print "connected to Joomla's MySQL database..."
         
+        self._fetch_collections(cnx)
+
+        self._fetch_categories(cnx)
+        
         self._fetch_content(cnx)
         
         #close mysql connection
@@ -85,6 +91,8 @@ class Command(BaseCommand):
         else:
             return cnx
     
+    # QUERIES
+    
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
         # TODO cat_id, images, created_by
@@ -102,9 +110,51 @@ class Command(BaseCommand):
             article.save()
         
         cursor.close()
-        
+
+    def _fetch_collections(self, mysql_cnx):
+        """Creates Collections infering them from Categories extensions."""
+        query = "SELECT DISTINCT(extension) FROM {}categories".format(self.table_prefix)
+        cursor = mysql_cnx.cursor()
+        cursor.execute(query)
+        for extension in cursor:
+            collection = self._category_extension_to_collection(extension[0])
+            if collection:
+                collection.save()
+        cursor.close()
+
+    def _fetch_categories(self, mysql_cnx):
+        """Queries Joomla's categories table to populate Categories."""
+        fields = ('id', 'path', 'title', 'alias', 'description', 'published', 'parent_id', 'lft', 'rgt', 'level', 'extension')
+        query = "SELECT {} FROM {}categories".format(fields, self.table_prefix)
+        query = re.sub("[\(\)']", '', query) # clean tuple and quotes syntax
+        cursor = mysql_cnx.cursor()
+        cursor.execute(query)
+        categories = []
+        for content in cursor:
+            category_hash = self._tuples_to_dict(fields, content)
+            counter = 1
+            category = self._category_to_category(category_hash, counter)
+            if category:
+                categories.append(category)
+                counter += 1
+        # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
+        Category.objects.bulk_create(categories)
+        # set MPTT fields using django-mptt's own method
+        #Category.tree.rebuild()
+    
+    # HELPERS
+    
     def _tuples_to_dict(self, fields, results):
         return dict(zip(fields, results))
+
+    def _extension_to_collection(self, extension):
+        """Single mapping from Joomla extension to Cyclope collection."""
+        if extension == 'com_content':
+            return (1, 'Contenidos', ['article',])
+        else: # We might want to create other collections for newsfeeds, etc.
+            return (None, None, None)
+
+    # MODELS CONVERSION
 
     def _content_to_article(self, content):
         """Instances an Article object from a Content hash."""
@@ -112,16 +162,15 @@ class Command(BaseCommand):
         # Joomla's Read More feature
         article_content = content['introtext']
         if content['fulltext']:
-            article_content += fulltext
+            article_content += content['fulltext']
         
         return Article(
             name = content['title'],
-            slug = content['alias'], # or AutoSlug?
+            slug = content['alias'], # TODO or AutoSlug?
             creation_date = content['created'],
             modification_date = content['modified'],
             date = content['created'],
-            # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
-            published = content['state']==1,
+            published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
             text = article_content,
             #TODO redeco logic
             #summary = content['introtext'],
@@ -129,3 +178,29 @@ class Command(BaseCommand):
             #TODO import Users before
             #user_id = content['created_by']
         )
+
+    def _category_extension_to_collection(self, extension):
+        """Instances a Collection from a Category extension."""
+        id, name, types = self._extension_to_collection(extension)
+        if id != None:
+            collection = Collection.objects.create(id=id, name=name)
+            collection.content_types = [ContentType.objects.get(model=content_type) for content_type in types]
+            return collection
+
+    def _category_to_category(self, category_hash, counter):
+        """Instances a Category in Cyclope from Joomla's Categories table fields."""
+        collection_id, name, types = self._extension_to_collection(category_hash['extension'])
+        if collection_id: # bring categories for content only
+            return Category(
+                id = category_hash['id'], # keep ids for foreign keys
+                collection_id = collection_id,
+                name = category_hash['title'],
+                slug = category_hash['path'], # TODO or alias?
+                active = category_hash['published']==1,
+                parent_id = category_hash['parent_id'] if category_hash['parent_id'] != 0 else None,
+                # Cyclope and Joomla use the same tree algorithm
+                lft = category_hash['lft'],
+                rght = category_hash['rgt'],
+                level = category_hash['level'],
+                tree_id = counter, # TODO is this right?
+            )
