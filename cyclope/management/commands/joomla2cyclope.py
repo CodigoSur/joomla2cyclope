@@ -8,6 +8,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import IntegrityError
 import operator
 from autoslug.settings import slugify
+from datetime import datetime
 
 class Command(BaseCommand):
     help = """
@@ -215,7 +216,7 @@ class Command(BaseCommand):
             slug = content['alias'], # TODO or AutoSlug?
             creation_date = content['created'],
             modification_date = content['modified'],
-            date = content['created'],
+            date = content['created'] if content['created'] else datetime.now(),
             published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
             text = article_content,
             #TODO redeco logic
