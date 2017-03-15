@@ -214,9 +214,9 @@ class Command(BaseCommand):
         return Article(
             name = content['title'],
             slug = content['alias'], # TODO or AutoSlug?
-            creation_date = content['created'],
+            creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
-            date = content['created'] if content['created'] else datetime.now(),
+            date = content['created'],
             published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
             text = article_content,
             #TODO redeco logic
