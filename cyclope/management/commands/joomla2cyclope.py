@@ -274,6 +274,6 @@ class Command(BaseCommand):
         if re.search('class="cuerponota"', content):
             text = tree.xpath("*[@class='cuerponota']/text()")
         if summary and text:
-            return text, summary
+            return text[0], summary[0]
         else:
             return "", content    
