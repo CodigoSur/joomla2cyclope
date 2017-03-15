@@ -11,6 +11,7 @@ from autoslug.settings import slugify
 from datetime import datetime
 from django.contrib.auth.models import User
 from lxml import html
+from lxml.cssselect import CSSSelector # REQUIRES cssselect
 
 class Command(BaseCommand):
     help = """
@@ -248,7 +249,7 @@ class Command(BaseCommand):
             article_content += content['fulltext']
             
         # especifico redecom.com.ar
-        text, summary = self._redeco_text_logic(article_content)
+        summary, text = self._redeco_text_logic(article_content)
         
         return Article(
             name = content['title'],
@@ -318,12 +319,18 @@ class Command(BaseCommand):
            se trata ya sea de parrafos o spans con estas clases."""
         summary, text = None, None
         tree = html.fromstring(content)
+        bajada = tree.xpath("*[@class='bajada']")
         if re.search('class="bajada"', content):
-            summary = tree.xpath("*[@class='bajada']/text()") # or use cssselect
-        if re.search('class="cuerponota"', content):
-            text = tree.xpath("*[@class='cuerponota']/text()")
-        if summary and text:
-            return text[0], summary[0]
+            sel = CSSSelector('.bajada')
+            bajada = sel(tree)[0]
+            summary = bajada.text
+            try:
+                tree.remove(bajada)
+            except ValueError:
+                pass # it does work
+            text = tree.text_content()
+        if summary:
+            return summary, text
         else:
             return "", content    
 
