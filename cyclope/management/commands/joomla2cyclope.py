@@ -10,6 +10,8 @@ import operator
 from autoslug.settings import slugify
 from datetime import datetime
 
+from lxml import html
+
 class Command(BaseCommand):
     help = """
     Migrates a site in Joomla to CyclopeCMS.
@@ -210,18 +212,20 @@ class Command(BaseCommand):
         article_content = content['introtext']
         if content['fulltext']:
             article_content += content['fulltext']
+            
+        # especifico redecom.com.ar
+        text, summary = self._redeco_text_logic(article_content)
         
         return Article(
             name = content['title'],
             slug = content['alias'], # TODO or AutoSlug?
-            creation_date = content['created'],
+            creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
-            date = content['created'] if content['created'] else datetime.now(),
+            date = content['created'],
             published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
-            text = article_content,
-            #TODO redeco logic
-            #summary = content['introtext'],
-            #pretitle = content['introtext']
+            summary = summary,
+            text = text,
+            #pretitle
             #TODO import Users before
             #user_id = content['created_by']
         )
@@ -258,3 +262,18 @@ class Command(BaseCommand):
             content_type_id = ContentType.objects.get(model=model).pk,
             object_id = objeto.pk
         )
+        
+    def _redeco_text_logic(self, content):
+        """Logica de redecom.com.ar en html traducida a columnas Cyclope.
+           61% de articulos se divien en bajada y cuerpo nota,
+           se trata ya sea de parrafos o spans con estas clases."""
+        summary, text = None, None
+        tree = html.fromstring(content)
+        if re.search('class="bajada"', content):
+            summary = tree.xpath("*[@class='bajada']/text()") # or use cssselect
+        if re.search('class="cuerponota"', content):
+            text = tree.xpath("*[@class='cuerponota']/text()")
+        if summary and text:
+            return text, summary
+        else:
+            return "", content    
