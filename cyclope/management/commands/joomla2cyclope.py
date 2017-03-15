@@ -80,11 +80,14 @@ class Command(BaseCommand):
         user_count = self._fetch_users(cnx)
         print "-> {} Usuarios migrados".format(user_count)
         
-        self._fetch_collections(cnx)
+        collections_count = self._fetch_collections(cnx)
+        print "-> {} Colecciones creadas".format(collections_count)
 
-        self._fetch_categories(cnx)
+        categories_count = self._fetch_categories(cnx)
+        print "-> {} Categorias migradas".format(categories_count)
         
-        self._fetch_content(cnx)
+        articles_count = self._fetch_content(cnx)
+        print "-> {} Articulos migrados".format(articles_count)
         
         #close mysql connection
         cnx.close()
@@ -139,6 +142,7 @@ class Command(BaseCommand):
             article.save()
             self._categorize_object(article, content_hash['catid'], 'article')
         cursor.close()
+        return Article.objects.count()
 
     def _fetch_collections(self, mysql_cnx):
         """Creates Collections infering them from Categories extensions."""
@@ -150,6 +154,7 @@ class Command(BaseCommand):
             if collection:
                 collection.save()
         cursor.close()
+        return Collection.objects.count()
 
     def _fetch_categories(self, mysql_cnx):
         """Queries Joomla's categories table to populate Categories."""
@@ -189,7 +194,7 @@ class Command(BaseCommand):
             Category.objects.bulk_create(categories)
         # set MPTT fields using django-mptt's own method TODO
         #Category.tree.rebuild()
-    
+        return Category.objects.count()
     # HELPERS
     
     def _clean_tuple(self, query):
