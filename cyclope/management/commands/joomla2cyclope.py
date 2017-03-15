@@ -20,6 +20,7 @@ class Command(BaseCommand):
     Required params are server host name, database name and database user and password.
     Optional params are joomla's table prefix.
     """
+    # TODO mysql.connector.errors.InterfaceError: 2013: Lost connection to MySQL server during query
 
     #NOTE django > 1.8 uses argparse instead of optparse module, 
     #so "You are encouraged to exclusively use **options for new commands."
