@@ -57,7 +57,7 @@ class Command(BaseCommand):
         ),
         make_option('--default_password',
             action='store',
-            dest='joomla_user_password',
+            dest='joomla_password',
             default=None,
             help='Default password for ALL users. Optional, otherwise usernames will be used.'
         ),
@@ -65,13 +65,13 @@ class Command(BaseCommand):
     
     # class constants
     table_prefix = None
-    joomla_password = ""
+    joomla_password = None
     
     def handle(self, *args, **options):
         """Joomla to Cyclope database migration logic"""
         
         self.table_prefix = options['prefix']
-        self.joomla_password = options['joomla_user_password']
+        self.joomla_password = options['joomla_password']
         
         # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
@@ -286,7 +286,7 @@ class Command(BaseCommand):
         )
         
     def _user_to_user(self, user_hash):
-        return User(
+        user = User(
             id = user_hash['id'],
             username = user_hash['username'],
             first_name = user_hash['name'],
@@ -297,3 +297,6 @@ class Command(BaseCommand):
             last_login = user_hash['lastvisitDate'] if user_hash['lastvisitDate'] else datetime.now(),
             date_joined = user_hash['registerDate'],
         )
+        password = self.joomla_password if self.joomla_password else user.username
+        user.set_password(password)
+        return user
