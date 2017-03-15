@@ -328,7 +328,7 @@ class Command(BaseCommand):
                 tree.remove(bajada)
             except ValueError:
                 pass # it does work
-            text = tree.text_content()
+            text = html.tostring(tree)
         if summary:
             return summary, text
         else:
