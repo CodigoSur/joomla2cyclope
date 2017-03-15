@@ -9,7 +9,7 @@ from django.db import IntegrityError
 import operator
 from autoslug.settings import slugify
 from datetime import datetime
-
+from django.contrib.auth.models import User
 from lxml import html
 
 class Command(BaseCommand):
@@ -56,25 +56,39 @@ class Command(BaseCommand):
             default='',
             help='Joomla\'s tables prefix'
         ),
+        make_option('--default_password',
+            action='store',
+            dest='joomla_password',
+            default=None,
+            help='Default password for ALL users. Optional, otherwise usernames will be used.'
+        ),
     )
     
     # class constants
     table_prefix = None
+    joomla_password = None
     
     def handle(self, *args, **options):
         """Joomla to Cyclope database migration logic"""
         
         self.table_prefix = options['prefix']
+        self.joomla_password = options['joomla_password']
         
         # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
         print "connected to Joomla's MySQL database..."
         
-        self._fetch_collections(cnx)
-
-        self._fetch_categories(cnx)
+        user_count = self._fetch_users(cnx)
+        print "-> {} Usuarios migrados".format(user_count)
         
-        self._fetch_content(cnx)
+        collections_count = self._fetch_collections(cnx)
+        print "-> {} Colecciones creadas".format(collections_count)
+
+        categories_count = self._fetch_categories(cnx)
+        print "-> {} Categorias migradas".format(categories_count)
+        
+        articles_count = self._fetch_content(cnx)
+        print "-> {} Articulos migrados".format(articles_count)
         
         #close mysql connection
         cnx.close()
@@ -99,10 +113,24 @@ class Command(BaseCommand):
     
     # QUERIES
     
+    def _fetch_users(self, mysql_cnx):
+        """Joomla Users to Cyclope
+           Are users treated as authors in Joomla?"""
+        fields = ('id', 'username', 'name', 'email', 'registerDate', 'lastvisitDate') # userType
+        query = "SELECT {} FROM {}users".format(fields, self.table_prefix)
+        query = self._clean_tuple(query)
+        cursor = mysql_cnx.cursor()
+        cursor.execute(query)
+        for user_cursor in cursor:
+            user_hash = self._tuples_to_dict(fields, user_cursor)
+            user = self._user_to_user(user_hash)
+            user.save()
+        return User.objects.count()
+    
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
-        # TODO images, created_by
-        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid')
+        # TODO images
+        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
         query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
@@ -115,6 +143,7 @@ class Command(BaseCommand):
             article.save()
             self._categorize_object(article, content_hash['catid'], 'article')
         cursor.close()
+        return Article.objects.count()
 
     def _fetch_collections(self, mysql_cnx):
         """Creates Collections infering them from Categories extensions."""
@@ -126,12 +155,13 @@ class Command(BaseCommand):
             if collection:
                 collection.save()
         cursor.close()
+        return Collection.objects.count()
 
     def _fetch_categories(self, mysql_cnx):
         """Queries Joomla's categories table to populate Categories."""
         fields = ('id', 'path', 'title', 'alias', 'description', 'published', 'parent_id', 'lft', 'rgt', 'level', 'extension')
         query = "SELECT {} FROM {}categories".format(fields, self.table_prefix)
-        query = re.sub("[\(\)']", '', query) # clean tuple and quotes syntax
+        query = self._clean_tuple(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
         # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
@@ -165,8 +195,12 @@ class Command(BaseCommand):
             Category.objects.bulk_create(categories)
         # set MPTT fields using django-mptt's own method TODO
         #Category.tree.rebuild()
-    
+        return Category.objects.count()
     # HELPERS
+    
+    def _clean_tuple(self, query):
+        """clean tuple and quotes syntax"""
+        return re.sub("[\(\)']", '', query)
     
     def _tuples_to_dict(self, fields, results):
         return dict(zip(fields, results))
@@ -225,9 +259,9 @@ class Command(BaseCommand):
             published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
             summary = summary,
             text = text,
-            #pretitle
-            #TODO import Users before
-            #user_id = content['created_by']
+            # TODO pretitle
+            text = article_content,
+            user_id = content['created_by']
         )
 
     def _category_extension_to_collection(self, extension):
@@ -253,7 +287,7 @@ class Command(BaseCommand):
                 lft = category_hash['lft'],
                 rght = category_hash['rgt'],
                 level = category_hash['level'],
-                tree_id = counter, # TODO is this right?
+                tree_id = counter, # TODO
             )
     
     def _categorize_object(self, objeto, cat_id, model):
@@ -263,6 +297,22 @@ class Command(BaseCommand):
             object_id = objeto.pk
         )
         
+    def _user_to_user(self, user_hash):
+        user = User(
+            id = user_hash['id'],
+            username = user_hash['username'],
+            first_name = user_hash['name'],
+            email = user_hash['email'],
+            is_staff=True,
+            is_active=True,
+            is_superuser=True, # else doesn't have any permissions
+            last_login = user_hash['lastvisitDate'] if user_hash['lastvisitDate'] else datetime.now(),
+            date_joined = user_hash['registerDate'],
+        )
+        password = self.joomla_password if self.joomla_password else user.username
+        user.set_password(password)
+        return user
+
     def _redeco_text_logic(self, content):
         """Logica de redecom.com.ar en html traducida a columnas Cyclope.
            61% de articulos se divien en bajada y cuerpo nota,
@@ -277,3 +327,4 @@ class Command(BaseCommand):
             return text[0], summary[0]
         else:
             return "", content    
+
