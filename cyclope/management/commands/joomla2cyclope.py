@@ -260,7 +260,6 @@ class Command(BaseCommand):
             summary = summary,
             text = text,
             # TODO pretitle
-            text = article_content,
             user_id = content['created_by']
         )
 
