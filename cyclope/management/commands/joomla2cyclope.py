@@ -125,8 +125,8 @@ class Command(BaseCommand):
     
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
-        # TODO images, created_by
-        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid')
+        # TODO images
+        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
         query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
@@ -249,7 +249,7 @@ class Command(BaseCommand):
             date = content['created'],
             published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
             text = article_content,
-            #user_id = content['created_by']
+            user_id = content['created_by']
         )
 
     def _category_extension_to_collection(self, extension):
