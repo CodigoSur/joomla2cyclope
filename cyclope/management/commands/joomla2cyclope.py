@@ -303,16 +303,19 @@ class Command(BaseCommand):
             imagenes.append({'src': images['image_fulltext'], 'alt': images['image_fulltext_alt']})
         # instances images from content
         full_content = self._joomla_content(content_hash)
-        # x-treme hack! html.fromstring having ID collisions, collect_ids is not an option...
-        context = etree.iterparse(BytesIO(full_content.encode('utf-8')), huge_tree=True, html=True)
-        for action, elem in context: pass # just read it
-        tree = context.root
-        sel = CSSSelector('img')
-        imgs = sel(tree)
-        for img in imgs:
-            src = img.get('src')
-            alt = img.get('alt')
-            imagenes.append({'src': src, 'alt': alt})
+        
+        try: # x-treme hack! html.fromstring having ID collisions, collect_ids is not an option...
+            context = etree.iterparse(BytesIO(full_content.encode('utf-8')), huge_tree=True, html=True)
+            for action, elem in context: pass # just read it
+            tree = context.root
+            sel = CSSSelector('img')
+            imgs = sel(tree)
+            for img in imgs:
+                src = img.get('src')
+                alt = img.get('alt')
+                imagenes.append({'src': src, 'alt': alt})
+        except etree.XMLSyntaxError:
+            pass
         return imagenes
 
     # MODELS CONVERSION
