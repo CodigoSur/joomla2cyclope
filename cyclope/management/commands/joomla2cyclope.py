@@ -15,6 +15,7 @@ from lxml import html, etree
 from lxml.cssselect import CSSSelector # FIXME REQUIRES cssselect
 import json
 from django.db import transaction
+from io import BytesIO
 
 class Command(BaseCommand):
     help = """
@@ -103,7 +104,7 @@ class Command(BaseCommand):
         print "-> {} Articulos migrados".format(articles_count)
         
         categorizations_count = self._categorize_articles(articles_categorizations)
-        print "-> {} Articulos categorizados".formar(categorizations_count)
+        print "-> {} Articulos categorizados".format(categorizations_count)
         
         images_count = self._create_images(article_images_hash)
         print "-> {} Imagenes migradas".format(articles_count)
@@ -302,7 +303,10 @@ class Command(BaseCommand):
             imagenes.append({'src': images['image_fulltext'], 'alt': images['image_fulltext_alt']})
         # instances images from content
         full_content = self._joomla_content(content_hash)
-        tree = html.fromstring(full_content)
+        # x-treme hack! html.fromstring having ID collisions, collect_ids is not an option...
+        context = etree.iterparse(BytesIO(full_content.encode('utf-8')), huge_tree=True, html=True)
+        for action, elem in context: pass # just read it
+        tree = context.root
         sel = CSSSelector('img')
         imgs = sel(tree)
         for img in imgs:
