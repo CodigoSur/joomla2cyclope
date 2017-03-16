@@ -2,6 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 from optparse import make_option
 import mysql.connector
 import re
+from cyclope.models import SiteSettings
 from cyclope.apps.articles.models import Article
 from cyclope.core.collections.models import Collection, Category, Categorization
 from django.contrib.contenttypes.models import ContentType
@@ -62,22 +63,31 @@ class Command(BaseCommand):
             default=None,
             help='Default password for ALL users. Optional, otherwise usernames will be used.'
         ),
+        make_option('--devel',
+            action='store_true',
+            dest='devel',
+            help='Use http://localhost:8000 as site url (development)'
+        ),
     )
     
     # class constants
     table_prefix = None
     joomla_password = None
+    devel_url = False
     
     def handle(self, *args, **options):
         """Joomla to Cyclope database migration logic"""
         
         self.table_prefix = options['prefix']
         self.joomla_password = options['joomla_password']
-        
+        self.devel_url = options['devel']
+
         # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
         print "connected to Joomla's MySQL database..."
         
+        self._site_settings_setter()
+
         user_count = self._fetch_users(cnx)
         print "-> {} Usuarios migrados".format(user_count)
         
@@ -196,7 +206,17 @@ class Command(BaseCommand):
         # set MPTT fields using django-mptt's own method TODO
         #Category.tree.rebuild()
         return Category.objects.count()
+
+
     # HELPERS
+
+    def _site_settings_setter(self):
+        settings = SiteSettings.objects.all()[0]
+        site = settings.site
+        if not self.devel_url:
+            site.domain = "www.redecom.com.ar" # TODO query
+        else:
+            site.domain = "localhost:8000"
     
     def _clean_tuple(self, query):
         """clean tuple and quotes syntax"""
