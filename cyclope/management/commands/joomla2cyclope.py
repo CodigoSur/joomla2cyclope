@@ -1,6 +1,6 @@
 from django.core.management.base import BaseCommand, CommandError
 from optparse import make_option
-import mysql.connector
+import pymysql
 import re
 from cyclope.models import SiteSettings
 from cyclope.apps.articles.models import Article
@@ -11,7 +11,7 @@ import operator
 from autoslug.settings import slugify
 from datetime import datetime
 from django.contrib.auth.models import User
-from lxml import html
+from lxml import html, etree
 from lxml.cssselect import CSSSelector # FIXME REQUIRES cssselect
 import json
 from django.db import transaction
@@ -25,8 +25,6 @@ class Command(BaseCommand):
     Required params are server host name, database name and database user and password.
     Optional params are joomla's table prefix.
     """
-    # TODO mysql.connector.errors.InterfaceError: 2013: Lost connection to MySQL server during query
-
     #NOTE django > 1.8 uses argparse instead of optparse module, 
     #so "You are encouraged to exclusively use **options for new commands."
     #https://docs.djangoproject.com/en/1.9/howto/custom-management-commands/
@@ -115,21 +113,17 @@ class Command(BaseCommand):
         
     def _mysql_connection(self, host, database, user, password):
         """Establish a MySQL connection to the given option params and return it"""
-        config = {
-            'host': host,
-            'database': database,
-            'user': user
-        }
-        if password:
-            config['password']=password
-        try:
-            cnx = mysql.connector.connect(**config)
-            return cnx
-        except mysql.connector.Error as err:
-            print err
-            raise
-        else:
-            return cnx
+        password = password if password else ""
+#            cnx = mysql.connector.connect(**config)
+        cnx = pymysql.connect(
+            host='localhost',
+            user=user,
+            password=password,
+            db=database,
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+        return cnx
 
     # QUERIES
 
@@ -141,8 +135,7 @@ class Command(BaseCommand):
         query = self._clean_tuple(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
-        for user_cursor in cursor:
-            user_hash = self._tuples_to_dict(fields, user_cursor)
+        for user_hash in cursor:
             user = self._user_to_user(user_hash)
             user.save()
         cursor.close()
@@ -162,8 +155,7 @@ class Command(BaseCommand):
         #single transaction for all articles
         transaction.enter_transaction_management()
         transaction.managed(True)
-        for content in cursor:
-            content_hash = self._tuples_to_dict(fields, content)
+        for content_hash in cursor:
             article = self._content_to_article(content_hash)
             article.save()
             # this is here to have a single query to the largest table
@@ -180,7 +172,7 @@ class Command(BaseCommand):
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
         for extension in cursor:
-            collection = self._category_extension_to_collection(extension[0])
+            collection = self._category_extension_to_collection(extension['extension'])
             if collection:
                 collection.save()
         cursor.close()
@@ -195,8 +187,7 @@ class Command(BaseCommand):
         cursor.execute(query)
         # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
         categories = []
-        for content in cursor:
-            category_hash = self._tuples_to_dict(fields, content)
+        for category_hash in cursor:
             counter = 1
             category = self._category_to_category(category_hash, counter)
             if category:
@@ -210,7 +201,7 @@ class Command(BaseCommand):
             cursor = mysql_cnx.cursor()
             query = "SELECT id FROM {}categories WHERE title IN (SELECT title FROM {}categories GROUP BY title HAVING COUNT(title) > 1)".format(self.table_prefix, self.table_prefix)
             cursor.execute(query)
-            result = [x[0] for x in cursor.fetchall()]
+            result = [x['id'] for x in cursor.fetchall()]
             cursor.close()
             duplicates = [cat for cat in categories if cat.id in result]
             for dup in duplicates: categories.remove(dup)
