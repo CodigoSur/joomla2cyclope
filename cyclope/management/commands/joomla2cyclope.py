@@ -145,6 +145,7 @@ class Command(BaseCommand):
             user_hash = self._tuples_to_dict(fields, user_cursor)
             user = self._user_to_user(user_hash)
             user.save()
+        cursor.close()
         return User.objects.count()
 
     def _fetch_content(self, mysql_cnx):
