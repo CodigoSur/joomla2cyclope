@@ -14,6 +14,7 @@ from django.contrib.auth.models import User
 from lxml import html
 from lxml.cssselect import CSSSelector # FIXME REQUIRES cssselect
 import json
+from django.db import transaction
 
 class Command(BaseCommand):
     help = """
@@ -157,6 +158,9 @@ class Command(BaseCommand):
         query = re.sub("[\[\]']", '', query) # clean list and quotes syntax
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
+        #single transaction for all articles
+        transaction.enter_transaction_management()
+        transaction.managed(True)
         for content in cursor:
             content_hash = self._tuples_to_dict(fields, content)
             article = self._content_to_article(content_hash)
@@ -165,6 +169,8 @@ class Command(BaseCommand):
             articles_categorizations.append( self._categorize_object(article, content_hash['catid'], 'article') )
             articles_images.append( self._content_to_images(content_hash) )
         cursor.close()
+        transaction.commit()
+        transaction.leave_transaction_management()
         return Article.objects.count(), articles_images, articles_categorizations
 
     def _fetch_collections(self, mysql_cnx):
