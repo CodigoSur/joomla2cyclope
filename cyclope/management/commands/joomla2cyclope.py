@@ -11,6 +11,9 @@ import operator
 from autoslug.settings import slugify
 from datetime import datetime
 from django.contrib.auth.models import User
+from lxml import html
+from lxml.cssselect import CSSSelector # FIXME REQUIRES cssselect
+import json
 
 class Command(BaseCommand):
     help = """
@@ -97,8 +100,14 @@ class Command(BaseCommand):
         categories_count = self._fetch_categories(cnx)
         print "-> {} Categorias migradas".format(categories_count)
         
-        articles_count = self._fetch_content(cnx)
+        articles_count, articles_images, articles_categorizations = self._fetch_content(cnx)
         print "-> {} Articulos migrados".format(articles_count)
+        
+        categorizations_count = self._categorize_articles(articles_categorizations)
+        print "-> {} Articulos categorizados".formar(categorizations_count)
+        
+        images_count = self._create_images(article_images_hash)
+        print "-> {} Imagenes migradas".format(articles_count)
         
         #close mysql connection
         cnx.close()
@@ -120,9 +129,9 @@ class Command(BaseCommand):
             raise
         else:
             return cnx
-    
+
     # QUERIES
-    
+
     def _fetch_users(self, mysql_cnx):
         """Joomla Users to Cyclope
            Are users treated as authors in Joomla?"""
@@ -136,11 +145,12 @@ class Command(BaseCommand):
             user = self._user_to_user(user_hash)
             user.save()
         return User.objects.count()
-    
+
     def _fetch_content(self, mysql_cnx):
         """Queries Joomla's _content table to populate Articles."""
-        # TODO images
-        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by')
+        articles_images = []
+        articles_categorizations = []
+        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by', 'images')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
         query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
@@ -151,9 +161,11 @@ class Command(BaseCommand):
             content_hash = self._tuples_to_dict(fields, content)
             article = self._content_to_article(content_hash)
             article.save()
-            self._categorize_object(article, content_hash['catid'], 'article')
+            # this is here to have a single query to the largest table
+            articles_categorizations.append( self._categorize_object(article, content_hash['catid'], 'article') )
+            articles_images.append( self._content_to_images(content_hash) )
         cursor.close()
-        return Article.objects.count()
+        return Article.objects.count(), articles_images, articles_categorizations
 
     def _fetch_collections(self, mysql_cnx):
         """Creates Collections infering them from Categories extensions."""
@@ -207,6 +219,14 @@ class Command(BaseCommand):
         #Category.tree.rebuild()
         return Category.objects.count()
 
+    def _create_images(self, images):
+        pictures = [self._image_to_picture(image_hash) for image_hash in images]
+        Picture.objects.bulk_create(pictures)
+        return Picture.objects.count()
+
+    def _categorize_articles(self, categorizations):
+        Categorization.objects.bulk_create(categorizations)
+        return Categorization.objects.count()
 
     # HELPERS
 
@@ -257,26 +277,70 @@ class Command(BaseCommand):
                 else : counter = 1
         return categories
 
+    # JOOMLA'S LOGIC
+
+    def _joomla_content(self, content):
+        """Joomla's Read More feature separates content in two columns: introtext and fulltext,
+           Most of the time all of the content sits at introtext, but when Read More is activated,
+           it is spwaned through both introtext and fulltext.
+           Receives the context hash."""
+        article_content = content['introtext']
+        if content['fulltext']:
+            article_content += content['fulltext']
+        return article_content
+
+    def _content_to_images(self, content_hash):
+        """Instances images from content table's images column or HTML img tags in content.
+           Images column has the following JSON '{"image_intro":"","float_intro":"","image_intro_alt":"","image_intro_caption":"","image_fulltext":"","float_fulltext":"","image_fulltext_alt":"","image_fulltext_caption":""}'
+           """
+        imagenes = []
+        # instances images from column
+        images = content_hash['images']
+        images = json.loads(images)
+        # TODO captions, we could insert image_fulltext inside text?
+        if images['image_intro']:
+            imagenes.append({'src': images['image_intro'], 'alt': images['image_intro_alt']})
+        if images['image_fulltext']:
+            imagenes.append({'src': images['image_fulltext'], 'alt': images['image_fulltext_alt']})
+        # instances images from content
+        full_content = self._joomla_content(content_hash)
+        tree = html.fromstring(full_content)
+        sel = CSSSelector('img')
+        imgs = sel(tree)
+        for img in imgs:
+            src = img.get('src')
+            alt = img.get('alt')
+            imagenes.append({'src': src, 'alt': alt})
+        return imagenes
+
     # MODELS CONVERSION
 
     def _content_to_article(self, content):
         """Instances an Article object from a Content hash."""
-        
-        # Joomla's Read More feature
-        article_content = content['introtext']
-        if content['fulltext']:
-            article_content += content['fulltext']
-        
-        return Article(
+        article = Article(
             name = content['title'],
             slug = content['alias'], # TODO or AutoSlug?
             creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
             date = content['created'],
             published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
-            text = article_content,
+            text =  self._joomla_content(content),
             user_id = content['created_by']
         )
+        return article
+
+    def _image_to_picture(self, image_hash):
+        src = image_hash['src']
+        alt = image_hash['alt']
+        # TODO URL 
+        name = slugify(src)
+        picture = Picture(
+            image = src,
+            description = alt,
+            name = name,
+            # creation_date = post['post_date'], article
+        )
+        return picture
 
     def _category_extension_to_collection(self, extension):
         """Instances a Collection from a Category extension."""
@@ -305,11 +369,12 @@ class Command(BaseCommand):
             )
     
     def _categorize_object(self, objeto, cat_id, model):
-        Categorization.objects.create(
+        categorization = Categorization(
             category_id = cat_id,
             content_type_id = ContentType.objects.get(model=model).pk,
             object_id = objeto.pk
         )
+        return categorization
         
     def _user_to_user(self, user_hash):
         user = User(
