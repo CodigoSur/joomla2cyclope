@@ -2,9 +2,11 @@ from django.core.management.base import BaseCommand, CommandError
 from optparse import make_option
 import pymysql
 import re
-from cyclope.models import SiteSettings
+from cyclope.models import SiteSettings, RelatedContent
 from cyclope.apps.articles.models import Article
 from cyclope.core.collections.models import Collection, Category, Categorization
+from django.contrib.contenttypes.models import ContentType
+from cyclope.apps.medialibrary.models import Picture
 from django.contrib.contenttypes.models import ContentType
 from django.db import IntegrityError
 import operator
@@ -16,6 +18,7 @@ from lxml.cssselect import CSSSelector # FIXME REQUIRES cssselect
 import json
 from django.db import transaction
 from io import BytesIO
+
 
 class Command(BaseCommand):
     help = """
@@ -106,8 +109,10 @@ class Command(BaseCommand):
         categorizations_count = self._categorize_articles(articles_categorizations)
         print "-> {} Articulos categorizados".format(categorizations_count)
         
-        images_count = self._create_images(article_images_hash)
-        print "-> {} Imagenes migradas".format(articles_count)
+        images_count, related_count, article_images_count = self._create_images(articles_images)
+        print "-> {} Imagenes migradas".format(images_count)
+        print "-> {} Imagenes de articulos".format(article_images_count)
+        print "-> {} Imagenes como contenido relacionado".format(related_count)
         
         #close mysql connection
         cnx.close()
@@ -161,7 +166,7 @@ class Command(BaseCommand):
             article.save()
             # this is here to have a single query to the largest table
             articles_categorizations.append( self._categorize_object(article, content_hash['catid'], 'article') )
-            articles_images.append( self._content_to_images(content_hash) )
+            articles_images.append( self._content_to_images(content_hash, article.pk) )
         cursor.close()
         transaction.commit()
         transaction.leave_transaction_management()
@@ -219,9 +224,12 @@ class Command(BaseCommand):
         return Category.objects.count()
 
     def _create_images(self, images):
-        pictures = [self._image_to_picture(image_hash) for image_hash in images]
-        Picture.objects.bulk_create(pictures)
-        return Picture.objects.count()
+        images = [image for image in images if image]
+        for image_hash in images:
+            image_hash = image_hash[0] # flatten
+            picture = self._image_to_picture(image_hash)
+            self._image_article_relation(image_hash, picture)
+        return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
 
     def _categorize_articles(self, categorizations):
         Categorization.objects.bulk_create(categorizations)
@@ -288,7 +296,7 @@ class Command(BaseCommand):
             article_content += content['fulltext']
         return article_content
 
-    def _content_to_images(self, content_hash):
+    def _content_to_images(self, content_hash, article_id):
         """Instances images from content table's images column or HTML img tags in content.
            Images column has the following JSON '{"image_intro":"","float_intro":"","image_intro_alt":"","image_intro_caption":"","image_fulltext":"","float_fulltext":"","image_fulltext_alt":"","image_fulltext_caption":""}'
            """
@@ -298,12 +306,14 @@ class Command(BaseCommand):
         images = json.loads(images)
         # TODO captions, we could insert image_fulltext inside text?
         if images['image_intro']:
-            imagenes.append({'src': images['image_intro'], 'alt': images['image_intro_alt']})
+            image_hash = {'src': images['image_intro'], 'alt': images['image_intro_alt'], 'article_id': article_id, 'image_type': 'article' }
+            imagenes.append(image_hash)
         if images['image_fulltext']:
-            imagenes.append({'src': images['image_fulltext'], 'alt': images['image_fulltext_alt']})
+            image_hash = {'src': images['image_fulltext'], 'alt': images['image_fulltext_alt'], 'article_id': article_id, 'image_type': 'article' }
+            imagenes.append(image_hash)
+            
         # instances images from content
         full_content = self._joomla_content(content_hash)
-        
         try: # x-treme hack! html.fromstring having ID collisions, collect_ids is not an option...
             context = etree.iterparse(BytesIO(full_content.encode('utf-8')), huge_tree=True, html=True)
             for action, elem in context: pass # just read it
@@ -313,10 +323,23 @@ class Command(BaseCommand):
             for img in imgs:
                 src = img.get('src')
                 alt = img.get('alt')
-                imagenes.append({'src': src, 'alt': alt})
-        except etree.XMLSyntaxError:
+                image_hash = {'src': src, 'alt': alt, 'article_id': article_id, 'image_type': 'related'}
+                imagenes.append(image_hash)
+        except:
             pass
         return imagenes
+
+    def _image_article_relation(self, image_hash, picture):
+        """images comming from content's image column will be article images,
+           images comming from within the article's content will be just related contents."""
+        article_id = image_hash['article_id']
+        if image_hash['image_type'] == 'article':
+            picture.pictures.add(article_id)
+            picture.save()
+        elif image_hash['image_type'] == 'related':
+            other_type_id=ContentType.objects.get(name='picture').id
+            article=Article.objects.get(pk=article_id)
+            RelatedContent.objects.create(self_object=article, other_type_id=other_type_id, other_id = picture.pk)
 
     # MODELS CONVERSION
 
@@ -339,7 +362,8 @@ class Command(BaseCommand):
         alt = image_hash['alt']
         # TODO URL 
         name = slugify(src)
-        picture = Picture(
+        # needs to be created in order to build relations
+        picture = Picture.objects.create(
             image = src,
             description = alt,
             name = name,
