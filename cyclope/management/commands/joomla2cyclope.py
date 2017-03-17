@@ -14,7 +14,7 @@ from autoslug.settings import slugify
 from datetime import datetime
 from django.contrib.auth.models import User
 from lxml import html, etree
-from lxml.cssselect import CSSSelector # FIXME REQUIRES cssselect
+from lxml.cssselect import CSSSelector
 import json
 from django.db import transaction
 from io import BytesIO
@@ -28,6 +28,9 @@ class Command(BaseCommand):
 
     Required params are server host name, database name and database user and password.
     Optional params are joomla's table prefix.
+    
+    FIXME(doc) REQUIRES cssselect, PyMySQL
+    
     """
     #NOTE django > 1.8 uses argparse instead of optparse module, 
     #so "You are encouraged to exclusively use **options for new commands."
@@ -120,7 +123,6 @@ class Command(BaseCommand):
     def _mysql_connection(self, host, database, user, password):
         """Establish a MySQL connection to the given option params and return it"""
         password = password if password else ""
-#            cnx = mysql.connector.connect(**config)
         cnx = pymysql.connect(
             host='localhost',
             user=user,
@@ -237,6 +239,15 @@ class Command(BaseCommand):
 
     # HELPERS
 
+    def _clean_tuple(self, query):
+        """clean tuple and quotes syntax"""
+        return re.sub("[\(\)']", '', query)
+    
+    def _tuples_to_dict(self, fields, results):
+        return dict(zip(fields, results))
+
+    # CYCLOPE'S LOGIC
+
     def _site_settings_setter(self):
         settings = SiteSettings.objects.all()[0]
         site = settings.site
@@ -244,13 +255,6 @@ class Command(BaseCommand):
             site.domain = "www.redecom.com.ar" # TODO query
         else:
             site.domain = "localhost:8000"
-    
-    def _clean_tuple(self, query):
-        """clean tuple and quotes syntax"""
-        return re.sub("[\(\)']", '', query)
-    
-    def _tuples_to_dict(self, fields, results):
-        return dict(zip(fields, results))
 
     def _extension_to_collection(self, extension):
         """Single mapping from Joomla extension to Cyclope collection."""
@@ -304,7 +308,7 @@ class Command(BaseCommand):
         # instances images from column
         images = content_hash['images']
         images = json.loads(images)
-        # TODO captions, we could insert image_fulltext inside text?
+        # FIXME we could also use captions & insert image_fulltext inside text
         if images['image_intro']:
             image_hash = {'src': images['image_intro'], 'alt': images['image_intro_alt'], 'article_id': article_id, 'image_type': 'article' }
             imagenes.append(image_hash)
@@ -347,7 +351,7 @@ class Command(BaseCommand):
         """Instances an Article object from a Content hash."""
         article = Article(
             name = content['title'],
-            slug = content['alias'], # TODO or AutoSlug?
+            slug = content['alias'], # FIXME or AutoSlug?
             creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
             date = content['created'],
@@ -359,8 +363,8 @@ class Command(BaseCommand):
 
     def _image_to_picture(self, image_hash):
         src = image_hash['src']
-        alt = image_hash['alt']
-        # TODO URL 
+        alt = image_hash['alt'] if image_hash['alt'] else ""
+        # TODO devel URL 
         name = slugify(src)
         # needs to be created in order to build relations
         picture = Picture.objects.create(
@@ -387,7 +391,7 @@ class Command(BaseCommand):
                 id = category_hash['id'], # keep ids for foreign keys
                 collection_id = collection_id,
                 name = category_hash['title'],
-                slug = category_hash['path'], # TODO or alias?
+                slug = category_hash['path'], # FIXME or alias?
                 active = category_hash['published']==1,
                 parent_id = category_hash['parent_id'] if category_hash['parent_id'] != 0 else None,
                 # Cyclope and Joomla use the same tree algorithm
