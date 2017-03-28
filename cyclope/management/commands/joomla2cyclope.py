@@ -18,6 +18,7 @@ from lxml.cssselect import CSSSelector
 import json
 from django.db import transaction
 from io import BytesIO
+import time
 
 
 class Command(BaseCommand):
@@ -95,27 +96,35 @@ class Command(BaseCommand):
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
         print "connected to Joomla's MySQL database..."
         
+        start = time.time() # T
+
         self._site_settings_setter()
 
         user_count = self._fetch_users(cnx)
         print "-> {} Usuarios migrados".format(user_count)
+        self._time_from(start)
         
         collections_count = self._fetch_collections(cnx)
         print "-> {} Colecciones creadas".format(collections_count)
+        self._time_from(start)
 
         categories_count = self._fetch_categories(cnx)
         print "-> {} Categorias migradas".format(categories_count)
+        self._time_from(start)
         
         articles_count, articles_images, articles_categorizations = self._fetch_content(cnx)
         print "-> {} Articulos migrados".format(articles_count)
+        self._time_from(start)
         
         categorizations_count = self._categorize_articles(articles_categorizations)
         print "-> {} Articulos categorizados".format(categorizations_count)
+        self._time_from(start)
         
         images_count, related_count, article_images_count = self._create_images(articles_images)
         print "-> {} Imagenes migradas".format(images_count)
         print "-> {} Imagenes de articulos".format(article_images_count)
         print "-> {} Imagenes como contenido relacionado".format(related_count)
+        self._time_from(start)
         
         #close mysql connection
         cnx.close()
@@ -245,6 +254,11 @@ class Command(BaseCommand):
     
     def _tuples_to_dict(self, fields, results):
         return dict(zip(fields, results))
+
+    def _time_from(self, start):
+        now = time.time()
+        ellapsed = now - start 
+        print( "%.2f s" % ellapsed )
 
     # CYCLOPE'S LOGIC
 
