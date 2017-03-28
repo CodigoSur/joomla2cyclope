@@ -2,7 +2,7 @@ from django.core.management.base import BaseCommand, CommandError
 from optparse import make_option
 import pymysql
 import re
-from cyclope.models import SiteSettings, RelatedContent
+from cyclope.models import SiteSettings, RelatedContent, Menu, MenuItem
 from cyclope.apps.articles.models import Article
 from cyclope.core.collections.models import Collection, Category, Categorization
 from django.contrib.contenttypes.models import ContentType
@@ -102,6 +102,12 @@ class Command(BaseCommand):
 
         user_count = self._fetch_users(cnx)
         print "-> {} Usuarios migrados".format(user_count)
+        self._time_from(start)
+
+        menus_count = self._fetch_menus(cnx)
+        menuitem_count = self._fetch_menuitems(cnx)
+        print "-> {} Menus migrados.".format(menus_count)
+        print "-> {} Items de Menu migrados.".format(menuitem_count)
         self._time_from(start)
         
         collections_count = self._fetch_collections(cnx)
@@ -245,6 +251,36 @@ class Command(BaseCommand):
     def _categorize_articles(self, categorizations):
         Categorization.objects.bulk_create(categorizations)
         return Categorization.objects.count()
+
+    def _fetch_menus(self, cnx):
+        """migrate joomla menu_types to cyclope menus
+           they have a similar tree algorithm so hierarchy is preserved."""
+        fields = ('id', 'menutype', 'title', 'description')
+        query = "SELECT {} FROM {}menu_types".format(fields, self.table_prefix)
+        query = self._clean_tuple(query)
+        cursor = cnx.cursor()
+        cursor.execute(query)
+        for menu_type_hash in cursor:
+            menu = self._menu_type_to_menu(menu_type_hash)
+            menu.save()
+        cursor.close()
+        return Menu.objects.count()
+
+    def _fetch_menuitems(self, cnx):
+        """migrate joomla menus to cyclope menuitems.
+           they have a similar tree algorithm so hierarchy is preserved."""
+        fields = ('id', 'title', 'alias', 'path', 'link', 'published', 'parent_id', 'level', 'lft', 'rgt', 'home')
+        query = "SELECT {} FROM {}menu".format(fields, self.table_prefix)
+        query = self._clean_tuple(query)
+        cursor = cnx.cursor()
+        cursor.execute(query)
+        for menu_hash in cursor:
+            menuitem = self._menu_to_menuitem(menu_hash)
+            menuitem.save()
+        cursor.close()
+        return MenuItem.objects.count()
+        # TODO menutype (FK), alias/path, type, browserNav
+
 
     # HELPERS
 
@@ -438,3 +474,32 @@ class Command(BaseCommand):
         password = self.joomla_password if self.joomla_password else user.username
         user.set_password(password)
         return user
+
+    def _menu_type_to_menu(self, menu_type_hash):
+        menu = Menu(
+            id = menu_type_hash['id'],
+            name = menu_type_hash['title'],
+            main_menu = False,
+            # TODO AUTOSLUG?
+        )
+        return menu
+
+    def _menu_to_menuitem(menu_hash):
+        menuitem = MenuItem(
+            id = menu_hash['id'],
+            # menu_id TODO
+            name = menu_hash['title'],
+            parent_id = menu_hash['parent_id'],
+            # slug TODO AUTO?
+            site_home = menu_hash['home'], #==0
+            custom_url = menu_hash['link'],
+            url = menu_hash['path'], # TODO CHECK
+            active = menu_hash['published'],#==0
+            # layout_id TODO DEFAULT_LAYOUT
+            persistent_layout = False,
+            # content_type_id, object_id, content_view, view_options => None
+            lft = ['lft'],
+            rght = menu_hash['rgt'],
+            level = menu_hash['level'],
+            # tree_id = counter TODO
+        )
