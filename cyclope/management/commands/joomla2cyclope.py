@@ -278,19 +278,20 @@ class Command(BaseCommand):
         cursor = cnx.cursor()
         cursor.execute(query)
         menuitems = []
-        for menu_hash in cursor:
-            menuitem = self._menu_to_menuitem(menu_hash, menu_types)
-            menuitems.append(menuitem)
         # delete pre existent menuitem 1 because of id collision
         MenuItem.objects.all().delete()
+        for menu_hash in cursor:
+            if menu_types.has_key(menu_hash['menutype']):
+                menuitem = self._menu_to_menuitem(menu_hash, menu_types)
+                menuitems.append(menuitem)
         # skip custom save method
         MenuItem.objects.bulk_create(menuitems)
         # repeat to set hierarchies, for some reason this doesn't work in bulk, as categories do FIXME
         cursor.execute(query)#RE-READ FIXME
         for menu_hash in cursor:
-            menuitem = self._menu_to_menuitem_tree(menu_hash)
-            import pdb; pdb.set_trace()
-            menuitem.save()
+            if menu_types.has_key(menu_hash['menutype']):
+                menuitem = self._menu_to_menuitem_tree(menu_hash)
+                menuitem.save()
         cursor.close()
         return MenuItem.objects.count()
         # TODO alias/path, type, browserNav
@@ -412,12 +413,6 @@ class Command(BaseCommand):
     def _menu_type_id(self, menu_types, menutype):
         if menu_types.has_key(menutype):
             return menu_types[menutype]
-        else:
-            name = menutype if menutype else "Sin nombre"
-            new_menu = Menu.objects.create(name=menutype)
-            menu_types[menutype]=new_menu.pk # scope?
-            return new_menu.pk
-
 
     # MODELS CONVERSION
 
@@ -516,20 +511,22 @@ class Command(BaseCommand):
             name = menu_hash['title'],
             # slug TODO AUTO?
             site_home = menu_hash['home']==1,
-            custom_url = menu_hash['link'],
-            url = menu_hash['path'], # TODO CHECK
-            active = menu_hash['published']!=0,
+#            custom_url = menu_hash['link'],
+            url = menu_hash['path'], # TODO CHECK si la direccion es util
+            active = menu_hash['published']==1,
             # layout_id TODO DEFAULT_LAYOUT
             persistent_layout = False,
             # content_type_id, object_id, content_view, view_options => None
             lft = menu_hash['lft'],
             rght = menu_hash['rgt'],
             level = menu_hash['level'],
-            tree_id = menu_hash['id']#TODO O COUNTER
+            tree_id = menu_hash['id'] # counter TODO
         )
         return menuitem
 
     def _menu_to_menuitem_tree(self, menu_hash):
         menuitem = MenuItem.objects.get(pk=menu_hash['id'])
-        menuitem.parent_id = menu_hash['parent_id'] if menu_hash['parent_id'] != 0 else None
+        # 0 is default value, and 1 is Menu Item Root, a Menu with no menutype
+        if menu_hash['parent_id'] != 0 and menu_hash['parent_id'] != 1:
+            menuitem.parent_id = menu_hash['parent_id']
         return menuitem
