@@ -104,8 +104,8 @@ class Command(BaseCommand):
         print "-> {} Usuarios migrados".format(user_count)
         self._time_from(start)
 
-        menus_count = self._fetch_menus(cnx)
-        menuitem_count = self._fetch_menuitems(cnx)
+        menus_count, menu_types = self._fetch_menus(cnx)
+        menuitem_count = self._fetch_menuitems(cnx, menu_types)
         print "-> {} Menus migrados.".format(menus_count)
         print "-> {} Items de Menu migrados.".format(menuitem_count)
         self._time_from(start)
@@ -260,24 +260,30 @@ class Command(BaseCommand):
         query = self._clean_tuple(query)
         cursor = cnx.cursor()
         cursor.execute(query)
+        menu_types = {}
         for menu_type_hash in cursor:
             menu = self._menu_type_to_menu(menu_type_hash)
             menu.save()
+            menu_types[menu_type_hash['menutype']] = menu.pk
         cursor.close()
-        return Menu.objects.count()
+        return Menu.objects.count(), menu_types
 
-    def _fetch_menuitems(self, cnx):
+    def _fetch_menuitems(self, cnx, menu_types):
         """migrate joomla menus to cyclope menuitems.
-           they have a similar tree algorithm so hierarchy is preserved."""
-        fields = ('id', 'title', 'alias', 'path', 'link', 'published', 'parent_id', 'level', 'lft', 'rgt', 'home')
+           they have a similar tree algorithm so hierarchy is preserved.
+           menu_types is a dict mapping the FK to the menu_types menutype field."""
+        fields = ('id', 'menutype', 'title', 'alias', 'path', 'link', 'published', 'parent_id', 'level', 'lft', 'rgt', 'home')
         query = "SELECT {} FROM {}menu".format(fields, self.table_prefix)
         query = self._clean_tuple(query)
         cursor = cnx.cursor()
         cursor.execute(query)
+        menuitems = []
         for menu_hash in cursor:
-            menuitem = self._menu_to_menuitem(menu_hash)
-            menuitem.save()
+            menuitem = self._menu_to_menuitem(menu_hash, menu_types)
+            menuitems.append(menuitem)
         cursor.close()
+        # skip custom save method
+        MenuItem.objects.bulk_create(menuitems)
         return MenuItem.objects.count()
         # TODO menutype (FK), alias/path, type, browserNav
 
@@ -395,6 +401,16 @@ class Command(BaseCommand):
             article=Article.objects.get(pk=article_id)
             RelatedContent.objects.create(self_object=article, other_type_id=other_type_id, other_id = picture.pk)
 
+    def _menu_type_id(self, menu_types, menutype):
+        if menu_types.has_key(menutype):
+            return menu_types[menutype]
+        else:
+            name = menutype if menutype else "Sin nombre"
+            new_menu = Menu.objects.create(name=menutype)
+            menu_types[menutype]=new_menu.pk # scope?
+            return new_menu.pk
+
+
     # MODELS CONVERSION
 
     def _content_to_article(self, content):
@@ -484,10 +500,11 @@ class Command(BaseCommand):
         )
         return menu
 
-    def _menu_to_menuitem(menu_hash):
+    def _menu_to_menuitem(self, menu_hash, menu_types):
+        menu_id = self._menu_type_id(menu_types, menu_hash['menutype'])
         menuitem = MenuItem(
             id = menu_hash['id'],
-            # menu_id TODO
+            menu_id = menu_id,
             name = menu_hash['title'],
             parent_id = menu_hash['parent_id'],
             # slug TODO AUTO?
@@ -498,8 +515,9 @@ class Command(BaseCommand):
             # layout_id TODO DEFAULT_LAYOUT
             persistent_layout = False,
             # content_type_id, object_id, content_view, view_options => None
-            lft = ['lft'],
+            lft = menu_hash['lft'],
             rght = menu_hash['rgt'],
             level = menu_hash['level'],
             # tree_id = counter TODO
         )
+        return menuitem
