@@ -289,6 +289,7 @@ class Command(BaseCommand):
         cursor.execute(query)#RE-READ FIXME
         for menu_hash in cursor:
             menuitem = self._menu_to_menuitem_tree(menu_hash)
+            import pdb; pdb.set_trace()
             menuitem.save()
         cursor.close()
         return MenuItem.objects.count()
@@ -530,6 +531,5 @@ class Command(BaseCommand):
 
     def _menu_to_menuitem_tree(self, menu_hash):
         menuitem = MenuItem.objects.get(pk=menu_hash['id'])
-        menuitem.parent_id = menu_hash['parent_id']
-        # tree_id = counter TODO
+        menuitem.parent_id = menu_hash['parent_id'] if menu_hash['parent_id'] != 0 else None
         return menuitem
