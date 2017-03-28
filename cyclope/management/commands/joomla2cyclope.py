@@ -293,6 +293,8 @@ class Command(BaseCommand):
                 menuitem = self._menu_to_menuitem_tree(menu_hash)
                 menuitem.save()
         cursor.close()
+        # resetear tree ids
+        MenuItem.tree.rebuild()
         return MenuItem.objects.count()
         # TODO alias/path, type, browserNav
 
