@@ -281,11 +281,18 @@ class Command(BaseCommand):
         for menu_hash in cursor:
             menuitem = self._menu_to_menuitem(menu_hash, menu_types)
             menuitems.append(menuitem)
-        cursor.close()
+        # delete pre existent menuitem 1 because of id collision
+        MenuItem.objects.all().delete()
         # skip custom save method
         MenuItem.objects.bulk_create(menuitems)
+        # repeat to set hierarchies, for some reason this doesn't work in bulk, as categories do FIXME
+        cursor.execute(query)#RE-READ FIXME
+        for menu_hash in cursor:
+            menuitem = self._menu_to_menuitem_tree(menu_hash)
+            menuitem.save()
+        cursor.close()
         return MenuItem.objects.count()
-        # TODO menutype (FK), alias/path, type, browserNav
+        # TODO alias/path, type, browserNav
 
 
     # HELPERS
@@ -506,18 +513,23 @@ class Command(BaseCommand):
             id = menu_hash['id'],
             menu_id = menu_id,
             name = menu_hash['title'],
-            parent_id = menu_hash['parent_id'],
             # slug TODO AUTO?
-            site_home = menu_hash['home'], #==0
+            site_home = menu_hash['home']==1,
             custom_url = menu_hash['link'],
             url = menu_hash['path'], # TODO CHECK
-            active = menu_hash['published'],#==0
+            active = menu_hash['published']!=0,
             # layout_id TODO DEFAULT_LAYOUT
             persistent_layout = False,
             # content_type_id, object_id, content_view, view_options => None
             lft = menu_hash['lft'],
             rght = menu_hash['rgt'],
             level = menu_hash['level'],
-            # tree_id = counter TODO
+            tree_id = menu_hash['id']#TODO O COUNTER
         )
+        return menuitem
+
+    def _menu_to_menuitem_tree(self, menu_hash):
+        menuitem = MenuItem.objects.get(pk=menu_hash['id'])
+        menuitem.parent_id = menu_hash['parent_id']
+        # tree_id = counter TODO
         return menuitem
