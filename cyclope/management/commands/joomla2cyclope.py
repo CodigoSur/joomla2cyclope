@@ -211,11 +211,9 @@ class Command(BaseCommand):
         # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
         categories = []
         for category_hash in cursor:
-            counter = 1
-            category = self._category_to_category(category_hash, counter)
+            category = self._category_to_category(category_hash)
             if category:
                 categories.append(category)
-                counter += 1
         cursor.close()
         # find duplicate names, since AutoSlugField doesn't properly preserve uniqueness in bulk.
         try: # duplicate query is expensive, we try not to perform it if we can
@@ -236,8 +234,8 @@ class Command(BaseCommand):
             duplicates = self._dup_categories_collections(duplicates)
             categories += duplicates
             Category.objects.bulk_create(categories)
-        # set MPTT fields using django-mptt's own method TODO
-        #Category.tree.rebuild()
+        # set MPTT fields using django-mptt's own method
+        Category.tree.rebuild()
         return Category.objects.count()
 
     def _create_images(self, images):
@@ -279,14 +277,17 @@ class Command(BaseCommand):
         cursor.execute(query)
         menuitems = []
         for menu_hash in cursor:
-            menuitem = self._menu_to_menuitem(menu_hash, menu_types)
-            menuitems.append(menuitem)
+            if menu_types.has_key(menu_hash['menutype']):
+                menuitem = self._menu_to_menuitem(menu_hash, menu_types)
+                menuitems.append(menuitem)
         cursor.close()
+        # delete pre existent menuitem 1 because of id collision
+        MenuItem.objects.all().delete()
         # skip custom save method
         MenuItem.objects.bulk_create(menuitems)
+        # hierarchy ordering
+        MenuItem.tree.rebuild()
         return MenuItem.objects.count()
-        # TODO menutype (FK), alias/path, type, browserNav
-
 
     # HELPERS
 
@@ -308,7 +309,7 @@ class Command(BaseCommand):
         settings = SiteSettings.objects.all()[0]
         site = settings.site
         if not self.devel_url:
-            site.domain = "www.redecom.com.ar" # TODO query
+            site.domain = "www.redecom.com.ar" 
         else:
             site.domain = "localhost:8000"
 
@@ -364,7 +365,7 @@ class Command(BaseCommand):
         # instances images from column
         images = content_hash['images']
         images = json.loads(images)
-        # FIXME we could also use captions & insert image_fulltext inside text
+        # NOTE we could also use captions & insert image_fulltext inside text
         if images['image_intro']:
             image_hash = {'src': images['image_intro'], 'alt': images['image_intro_alt'], 'article_id': article_id, 'image_type': 'article' }
             imagenes.append(image_hash)
@@ -404,12 +405,6 @@ class Command(BaseCommand):
     def _menu_type_id(self, menu_types, menutype):
         if menu_types.has_key(menutype):
             return menu_types[menutype]
-        else:
-            name = menutype if menutype else "Sin nombre"
-            new_menu = Menu.objects.create(name=menutype)
-            menu_types[menutype]=new_menu.pk # scope?
-            return new_menu.pk
-
 
     # MODELS CONVERSION
 
@@ -417,7 +412,6 @@ class Command(BaseCommand):
         """Instances an Article object from a Content hash."""
         article = Article(
             name = content['title'],
-            slug = content['alias'], # FIXME or AutoSlug?
             creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
             date = content['created'],
@@ -449,7 +443,7 @@ class Command(BaseCommand):
             collection.content_types = [ContentType.objects.get(model=content_type) for content_type in types]
             return collection
 
-    def _category_to_category(self, category_hash, counter):
+    def _category_to_category(self, category_hash):
         """Instances a Category in Cyclope from Joomla's Categories table fields."""
         collection_id, name, types = self._extension_to_collection(category_hash['extension'])
         if collection_id: # bring categories for content only
@@ -457,14 +451,13 @@ class Command(BaseCommand):
                 id = category_hash['id'], # keep ids for foreign keys
                 collection_id = collection_id,
                 name = category_hash['title'],
-                slug = category_hash['path'], # FIXME or alias?
                 active = category_hash['published']==1,
                 parent_id = category_hash['parent_id'] if category_hash['parent_id'] != 0 else None,
                 # Cyclope and Joomla use the same tree algorithm
                 lft = category_hash['lft'],
                 rght = category_hash['rgt'],
                 level = category_hash['level'],
-                tree_id = counter, # TODO
+                tree_id = category_hash['id'] # any value, overwritten by tree rebuild
             )
     
     def _categorize_object(self, objeto, cat_id, model):
@@ -496,28 +489,30 @@ class Command(BaseCommand):
             id = menu_type_hash['id'],
             name = menu_type_hash['title'],
             main_menu = False,
-            # TODO AUTOSLUG?
         )
         return menu
 
     def _menu_to_menuitem(self, menu_hash, menu_types):
         menu_id = self._menu_type_id(menu_types, menu_hash['menutype'])
+        parent_id = self._menu_hierarchy(menu_hash['parent_id'])
         menuitem = MenuItem(
             id = menu_hash['id'],
             menu_id = menu_id,
             name = menu_hash['title'],
-            parent_id = menu_hash['parent_id'],
-            # slug TODO AUTO?
-            site_home = menu_hash['home'], #==0
-            custom_url = menu_hash['link'],
-            url = menu_hash['path'], # TODO CHECK
-            active = menu_hash['published'],#==0
-            # layout_id TODO DEFAULT_LAYOUT
+            parent_id = parent_id,
+            site_home = menu_hash['home']==1,
+            url = menu_hash['path'],
+            active = menu_hash['published']==1,
             persistent_layout = False,
-            # content_type_id, object_id, content_view, view_options => None
             lft = menu_hash['lft'],
             rght = menu_hash['rgt'],
             level = menu_hash['level'],
-            # tree_id = counter TODO
+            tree_id = menu_hash['id'] # any value, overwritten by tree rebuild
         )
         return menuitem
+
+    def _menu_hierarchy(self, parent_id):
+        """0 is default value, and 1 is Menu Item Root, a Menu with no menutype"""
+        if parent_id != 0 and parent_id != 1:
+            return parent_id
+        return None
