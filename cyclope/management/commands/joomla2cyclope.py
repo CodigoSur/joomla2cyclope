@@ -30,8 +30,16 @@ class Command(BaseCommand):
     Required params are server host name, database name and database user and password.
     Optional params are joomla's table prefix.
     
-    FIXME(doc) REQUIRES cssselect, PyMySQL
-    
+    This script makes use of libraries not included in Cyclope that need to be installed through pip
+
+    PyMySQL: a Python driver for MySQL database connection
+    $ pip install pymysql
+
+    Lxml needs to install some C header files in the system TODO
+    $ pip install lxml
+
+    Cssselect: a library for analyzing HTML
+    $ pip install cssselect
     """
     #NOTE django > 1.8 uses argparse instead of optparse module, 
     #so "You are encouraged to exclusively use **options for new commands."
