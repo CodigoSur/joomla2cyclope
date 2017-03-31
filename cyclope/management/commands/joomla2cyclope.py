@@ -35,11 +35,15 @@ class Command(BaseCommand):
     PyMySQL: a Python driver for MySQL database connection
     $ pip install pymysql
 
-    Lxml needs to install some C header files in the system TODO
+    Lxml depends on libxml2 headers
+    $ sudo apt-get install libxml2-dev libxslt1-dev
+    
+    Then:
     $ pip install lxml
 
     Cssselect: a library for analyzing HTML
     $ pip install cssselect
+
     """
     #NOTE django > 1.8 uses argparse instead of optparse module, 
     #so "You are encouraged to exclusively use **options for new commands."
