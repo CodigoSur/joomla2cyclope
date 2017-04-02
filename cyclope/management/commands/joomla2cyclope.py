@@ -252,10 +252,14 @@ class Command(BaseCommand):
 
     def _create_images(self, images):
         images = [image for image in images if image]
+        pictures = []
         for image_hash in images:
             image_hash = image_hash[0] # flatten
             picture = self._image_to_picture(image_hash)
-            self._image_article_relation(image_hash, picture)
+            pictures.add(picture)
+        Picture.objects.bulk_create(pictures)
+        self._bulk_relate_images(images, pictures)
+#            self._image_article_relation(image_hash, picture)
         return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
 
     def _categorize_articles(self, categorizations):
@@ -296,8 +300,8 @@ class Command(BaseCommand):
                 menuitems.append(menuitem)
         # skip custom save method
         MenuItem.objects.bulk_create(menuitems)
-        # repeat to set hierarchies, for some reason this doesn't work in bulk, as categories do FIXME
-        cursor.execute(query)#RE-READ FIXME
+        # because of MenuItem's uniqueness constraint with parent, we can't associate parent_ids at bulk creation time
+        cursor.execute(query)
         for menu_hash in cursor:
             if menu_types.has_key(menu_hash['menutype']):
                 menuitem = self._menu_to_menuitem_tree(menu_hash)
@@ -405,8 +409,27 @@ class Command(BaseCommand):
                 image_hash = {'src': src, 'alt': alt, 'article_id': article_id, 'image_type': 'related'}
                 imagenes.append(image_hash)
         except:
-            pass
+            pass # TODO contar %
         return imagenes
+
+    def bulk_relate_images(images, picture):
+        article_images = []
+        related_images = []
+        picture_type_id = ContentType.objects.get(name='picture').id
+        # TODO dicts
+        for image in images:
+            for picture in pictures:
+                if picture.pk == image['id']: #
+                    article_id = image['article_id']
+                    article_image_pair = (article_id, picture_id)
+                    if image_hash['image_type'] == 'article':
+                        article_images.add(article_image_pair)
+                    elif image_hash['image_type'] == 'related':
+                        #related_images.add(article_image_pair)
+                        related=RelatedContent(self_object=article_id, other_type_id=picture_type_id, other_id=picture_id)                        related_images.add(related)
+        article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images) # TODO cleaning
+        cnx.execute(article_images_query) # TODO SQLITE SQL
+        RelatedContent.objects.bulk_create(related_images)
 
     def _image_article_relation(self, image_hash, picture):
         """images comming from content's image column will be article images,
@@ -414,11 +437,11 @@ class Command(BaseCommand):
         article_id = image_hash['article_id']
         if image_hash['image_type'] == 'article':
             picture.pictures.add(article_id)
-            picture.save()
+            picture.save() # TODO SQL QUERY tabla intermedia
         elif image_hash['image_type'] == 'related':
-            other_type_id=ContentType.objects.get(name='picture').id
-            article=Article.objects.get(pk=article_id)
-            RelatedContent.objects.create(self_object=article, other_type_id=other_type_id, other_id = picture.pk)
+            other_type_id=ContentType.objects.get(name='picture').id # TODO N QUERIES! 1!
+            article=Article.objects.get(pk=article_id) # TODO just id?
+            RelatedContent.objects.create(self_object=article, other_type_id=other_type_id, other_id = picture.pk) # TODO BULK
 
     def _menu_type_id(self, menu_types, menutype):
         if menu_types.has_key(menutype):
@@ -444,14 +467,14 @@ class Command(BaseCommand):
         alt = image_hash['alt'] if image_hash['alt'] else ""
         # TODO devel URL 
         name = slugify(src)
-        # needs to be created in order to build relations
-        picture = Picture.objects.create(
+        picture = Picture(
             image = src,
             description = alt,
             name = name,
             # creation_date = post['post_date'], article
         )
-        return picture
+        image_hash['id'] = picture.pk #...
+        return picture #,  FIXME
 
     def _category_extension_to_collection(self, extension):
         """Instances a Collection from a Category extension."""
