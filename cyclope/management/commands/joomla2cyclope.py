@@ -413,38 +413,37 @@ class Command(BaseCommand):
         return imagenes
 
     def _bulk_relate_images(self, images):
+        """images comming from content's image column will be article images,
+           images comming from within the article's content will be just related contents."""
         article_images = []
         related_images = []
-        picture_type_id = ContentType.objects.get(name='picture').id
+        picture_type_id = ContentType.objects.get(name='picture').pk
+        article_type_id = ContentType.objects.get(name='article').pk
         for image_hash in images:
             article_id = image_hash['article_id']
             picture_id = image_hash['picture_id']
             article_image_pair = (article_id, picture_id)
             if image_hash['image_type'] == 'article':
                 article_images.append(article_image_pair)
-            #elif image_hash['image_type'] == 'related':
-            #    related=RelatedContent(self_object=article_id, other_type_id=picture_type_id, other_id=picture_id)
-            #    related_images.append(related)
-        article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images)
-        article_images_query =  self._clean_list(article_images_query)
+            elif image_hash['image_type'] == 'related':
+                related_tuple = (article_type_id, article_id, picture_type_id, picture_id)
+                related_images.append(related_tuple)
+        if article_images:
+            article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images)
+            article_images_query =  self._clean_list(article_images_query)
+            self._raw_sqlite_execute(article_images_query)
+        if related_images:
+            related_content_query = "INSERT INTO cyclope_relatedcontent ('self_type_id', 'self_id', 'other_type_id', 'other_id') VALUES {}".format(related_images)
+            related_content_query = self._clean_list(related_content_query)
+            self._raw_sqlite_execute(related_content_query)
+
+    def _raw_sqlite_execute(self, query):
         sqlite = connection.cursor()
         try:
-            sqlite.execute(article_images_query)
+            sqlite.execute(query)
+            connection.commit()
         finally:
             sqlite.close()
-        #RelatedContent.objects.bulk_create(related_images)
-
-    def _image_article_relation(self, image_hash, picture):
-        """images comming from content's image column will be article images,
-           images comming from within the article's content will be just related contents."""
-        article_id = image_hash['article_id']
-        if image_hash['image_type'] == 'article':
-            picture.pictures.add(article_id)
-            picture.save() # TODO SQL QUERY tabla intermedia
-        elif image_hash['image_type'] == 'related':
-            other_type_id=ContentType.objects.get(name='picture').id # TODO N QUERIES! 1!
-            article=Article.objects.get(pk=article_id) # TODO just id?
-            RelatedContent.objects.create(self_object=article, other_type_id=other_type_id, other_id = picture.pk) # TODO BULK
 
     def _menu_type_id(self, menu_types, menutype):
         if menu_types.has_key(menutype):
