@@ -8,7 +8,7 @@ from cyclope.core.collections.models import Collection, Category, Categorization
 from django.contrib.contenttypes.models import ContentType
 from cyclope.apps.medialibrary.models import Picture
 from django.contrib.contenttypes.models import ContentType
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction, connection
 import operator
 from autoslug.settings import slugify
 from datetime import datetime
@@ -16,7 +16,6 @@ from django.contrib.auth.models import User
 from lxml import html, etree
 from lxml.cssselect import CSSSelector
 import json
-from django.db import transaction
 from io import BytesIO
 import time
 
@@ -184,7 +183,7 @@ class Command(BaseCommand):
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
         query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
-        query = re.sub("[\[\]']", '', query) # clean list and quotes syntax
+        query = self._clean_list(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
         #single transaction for all articles
@@ -251,15 +250,12 @@ class Command(BaseCommand):
         return Category.objects.count()
 
     def _create_images(self, images):
-        images = [image for image in images if image]
-        pictures = []
+        images = [image[0] for image in images if image]
         for image_hash in images:
-            image_hash = image_hash[0] # flatten
             picture = self._image_to_picture(image_hash)
-            pictures.add(picture)
-        Picture.objects.bulk_create(pictures)
-        self._bulk_relate_images(images, pictures)
-#            self._image_article_relation(image_hash, picture)
+            picture.save() # n-queries, but resolves slug uniqueness FIXME
+            image_hash['picture_id'] = picture.pk
+        self._bulk_relate_images(images)
         return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
 
     def _categorize_articles(self, categorizations):
@@ -316,7 +312,11 @@ class Command(BaseCommand):
     def _clean_tuple(self, query):
         """clean tuple and quotes syntax"""
         return re.sub("[\(\)']", '', query)
-    
+
+    def _clean_list(self, query):
+        """clean list and quotes syntax"""
+        return re.sub("[\[\]']", '', query)
+ 
     def _tuples_to_dict(self, fields, results):
         return dict(zip(fields, results))
 
@@ -412,24 +412,27 @@ class Command(BaseCommand):
             pass # TODO contar %
         return imagenes
 
-    def bulk_relate_images(images, picture):
+    def _bulk_relate_images(self, images):
         article_images = []
         related_images = []
         picture_type_id = ContentType.objects.get(name='picture').id
-        # TODO dicts
-        for image in images:
-            for picture in pictures:
-                if picture.pk == image['id']: #
-                    article_id = image['article_id']
-                    article_image_pair = (article_id, picture_id)
-                    if image_hash['image_type'] == 'article':
-                        article_images.add(article_image_pair)
-                    elif image_hash['image_type'] == 'related':
-                        #related_images.add(article_image_pair)
-                        related=RelatedContent(self_object=article_id, other_type_id=picture_type_id, other_id=picture_id)                        related_images.add(related)
-        article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images) # TODO cleaning
-        cnx.execute(article_images_query) # TODO SQLITE SQL
-        RelatedContent.objects.bulk_create(related_images)
+        for image_hash in images:
+            article_id = image_hash['article_id']
+            picture_id = image_hash['picture_id']
+            article_image_pair = (article_id, picture_id)
+            if image_hash['image_type'] == 'article':
+                article_images.append(article_image_pair)
+            #elif image_hash['image_type'] == 'related':
+            #    related=RelatedContent(self_object=article_id, other_type_id=picture_type_id, other_id=picture_id)
+            #    related_images.append(related)
+        article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images)
+        article_images_query =  self._clean_list(article_images_query)
+        sqlite = connection.cursor()
+        try:
+            sqlite.execute(article_images_query)
+        finally:
+            sqlite.close()
+        #RelatedContent.objects.bulk_create(related_images)
 
     def _image_article_relation(self, image_hash, picture):
         """images comming from content's image column will be article images,
@@ -465,16 +468,15 @@ class Command(BaseCommand):
     def _image_to_picture(self, image_hash):
         src = image_hash['src']
         alt = image_hash['alt'] if image_hash['alt'] else ""
-        # TODO devel URL 
-        name = slugify(src)
+        name = src.split('/')[-1].split('.')[0] # get rid of path and extension
+        name = slugify(name)
         picture = Picture(
             image = src,
             description = alt,
             name = name,
             # creation_date = post['post_date'], article
         )
-        image_hash['id'] = picture.pk #...
-        return picture #,  FIXME
+        return picture
 
     def _category_extension_to_collection(self, extension):
         """Instances a Collection from a Category extension."""
