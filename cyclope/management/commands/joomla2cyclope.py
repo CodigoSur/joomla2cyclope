@@ -95,6 +95,12 @@ class Command(BaseCommand):
     table_prefix = None
     joomla_password = None
     devel_url = False
+
+    # menus
+    _menu_category_view = 'teaser_list'
+    _menu_category_view_options = '{"sort_by": "DATE+", "show_title": false, "show_description": false, "show_image": false, "items_per_page": 10, "limit_to_n_items": 0, "simplified": false, "traverse_children": true, "navigation": "DISABLED"}'
+    _category_content_type = None
+
     
     def handle(self, *args, **options):
         """Joomla to Cyclope database migration logic"""
@@ -102,6 +108,7 @@ class Command(BaseCommand):
         self.table_prefix = options['prefix']
         self.joomla_password = options['joomla_password']
         self.devel_url = options['devel']
+        self._category_content_type = ContentType.objects.get(name='category').pk
 
         # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
@@ -394,7 +401,8 @@ class Command(BaseCommand):
         if images['image_fulltext']:
             image_hash = {'src': images['image_fulltext'], 'alt': images['image_fulltext_alt'], 'article_id': article_id, 'image_type': 'article' }
             imagenes.append(image_hash)
-            
+
+    # TODO OWN METHOD            
         # instances images from content
         full_content = self._joomla_content(content_hash)
         try: # x-treme hack! html.fromstring having ID collisions, collect_ids is not an option...
@@ -537,18 +545,23 @@ class Command(BaseCommand):
     def _menu_to_menuitem(self, menu_hash, menu_types):
         menu_id = self._menu_type_id(menu_types, menu_hash['menutype'])
         parent_id = self._menu_hierarchy(menu_hash['parent_id'])
+        content_object_type, object_id = self._menu_content_object(menu_hash['link'])
         menuitem = MenuItem(
             id = menu_hash['id'],
             menu_id = menu_id,
             name = menu_hash['title'],
             site_home = menu_hash['home']==1,
-            url = menu_hash['path'], # TODO CHECK si la direccion es util
+            url = menu_hash['path'], # TODO slugify(path), alias not unique
             active = menu_hash['published']==1,
             persistent_layout = False,
             lft = menu_hash['lft'],
             rght = menu_hash['rgt'],
             level = menu_hash['level'],
-            tree_id = menu_hash['id'] # any value, overwritten by tree rebuild
+            tree_id = menu_hash['id'], # any value, overwritten by tree rebuild
+            content_type_id = content_object_type,
+            object_id = object_id,
+            content_view = self._menu_category_view,
+            view_options = self._menu_category_view_options
         )
         return menuitem
 
@@ -562,3 +575,13 @@ class Command(BaseCommand):
         if parent_id != 0 and parent_id != 1:
             return parent_id
         return None
+
+    def _menu_content_object(self, link):
+        """inferr a menu's content object from its joomla link
+           for now we treat just categories, other types might need urls instead of ids"""
+        if re.search('category', link):
+            link_category_id = link.split('&')[-1] # &id=123
+            link_category_id = link_category_id.split("=")[-1] # 123
+            category_id = int(link_category_id)
+            return self._category_content_type, category_id
+        return None, None
