@@ -133,9 +133,11 @@ class Command(BaseCommand):
         self._time_from(start)
 
         categories_count = self._fetch_categories(cnx)
-        print "-> {} Categorias migradas".format(categories_count)
+        print "-> {} Categorias migradas de Categorias Joomla".format(categories_count)
         self._time_from(start)
         
+        self._fetch_categories_from_tags(cnx)
+
         articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx)
         print "-> {} Articulos migrados".format(articles_count)
         self._time_from(start)
@@ -234,35 +236,58 @@ class Command(BaseCommand):
         query = self._clean_tuple(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
-        # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
         categories = []
         for category_hash in cursor:
             category = self._category_to_category(category_hash)
             if category:
                 categories.append(category)
         cursor.close()
-        # find duplicate names, since AutoSlugField doesn't properly preserve uniqueness in bulk.
-        try: # duplicate query is expensive, we try not to perform it if we can
+        try:
+            # save categorties in bulk so it doesn't call custom Category save, which doesn't allow custom ids
             Category.objects.bulk_create(categories)
         except IntegrityError:
-            cursor = mysql_cnx.cursor()
-            query = "SELECT id FROM {}categories WHERE title IN (SELECT title FROM {}categories GROUP BY title HAVING COUNT(title) > 1)".format(self.table_prefix, self.table_prefix)
-            cursor.execute(query)
-            result = [x['id'] for x in cursor.fetchall()]
-            cursor.close()
-            duplicates = [cat for cat in categories if cat.id in result]
-            for dup in duplicates: categories.remove(dup)
-            # sort duplicate categories by name ignoring case
-            duplicates.sort(key = lambda cat: operator.attrgetter('name')(cat).lower(), reverse=False)
-            # categories can have the same name if they're different collections, but not the same slug
-            duplicates = self._dup_categories_slugs(duplicates)
-            # categories with the same collection cannot have the same name
-            duplicates = self._dup_categories_collections(duplicates)
-            categories += duplicates
+            # duplicate query is expensive, we try not to perform it if we can
+            categories = self._category_duplicates_uniqueness(mysql_cnx, categories)
             Category.objects.bulk_create(categories)
-        # set MPTT fields using django-mptt's own method
         Category.tree.rebuild()
-        return Category.objects.count()
+        category_count = Category.objects.filter(collection=collection).count()
+        return category_count
+
+    def _category_duplicates_uniqueness(mysql_cnx, categories):
+        """find duplicate names, since AutoSlugField doesn't properly preserve uniqueness in bulk."""
+        cursor = mysql_cnx.cursor()
+        query = "SELECT id FROM {}categories WHERE title IN (SELECT title FROM {}categories GROUP BY title HAVING COUNT(title) > 1)".format(self.table_prefix, self.table_prefix)
+        cursor.execute(query) 
+        result = [x['id'] for x in cursor.fetchall()]
+        cursor.close()
+        duplicates = [cat for cat in categories if cat.id in result]
+        for dup in duplicates: categories.remove(dup)
+        # sort duplicate categories by name ignoring case
+        duplicates.sort(key = lambda cat: operator.attrgetter('name')(cat).lower(), reverse=False)
+        # categories can have the same name if they're different collections, but not the same slug
+        duplicates = self._dup_categories_slugs(duplicates)
+        # categories with the same collection cannot have the same name
+        duplicates = self._dup_categories_collections(duplicates)
+        categories += duplicates
+        return categories
+
+    def _fetch_categories_from_tags(self, mysql_cnx):
+        """Migrate Joomla's Tags as Cyclopes Categories in a separate Collection.
+           Table content_item_tags_map is the equivalent of Categorizations."""
+        fields = ('id', 'parent_id', 'lft', 'rgt', 'level', 'title', 'published') # note, description, urls, path, alias, created_time
+        query = "SELECT {} FROM {}tags".format(fields, self.table_prefix)
+        query = self._clean_tuple(query)
+        cursor = mysql_cnx.cursor()
+        cursor.execute(query)
+        tag_count = 0 #TODO
+        categories = []
+        for tag_hash in cursor:
+            category = self._tag_to_category(tag_hash)
+            categories.append(category)
+        cursor.close()
+        Category.objects.bulk_create(categories)
+        Category.tree.rebuild()
+        return tag_count
 
     def _create_images(self, images):
         images = [image[0] for image in images if image]
@@ -519,7 +544,22 @@ class Command(BaseCommand):
                 level = category_hash['level'],
                 tree_id = category_hash['id'] # any value, overwritten by tree rebuild
             )
-    
+
+    def _tag_to_category(self, tag_hash):
+        category = Category(
+            name = tag_hash['title'],
+            active = tag_hash['published']==1,
+            id = tag_hash['id'], # TODO WILL COLLIDE W/ categories !!!
+            parent_id = tag_hash['parent_id'],
+            collection_id = 0, # TODO
+            # Cyclope and Joomla use the same tree algorithm
+            lft = category_hash['lft'],
+            rght = category_hash['rgt'],
+            level = category_hash['level'],
+            tree_id = 666, # any value, overwritten by tree rebuild
+        )
+        return category
+
     def _categorize_object(self, objeto, cat_id, model):
         categorization = Categorization(
             category_id = cat_id,
