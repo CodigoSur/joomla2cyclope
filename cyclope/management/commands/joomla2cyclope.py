@@ -136,9 +136,10 @@ class Command(BaseCommand):
         print "-> {} Categorias migradas".format(categories_count)
         self._time_from(start)
         
-        articles_count, articles_images, articles_categorizations = self._fetch_content(cnx)
+        articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx)
         print "-> {} Articulos migrados".format(articles_count)
         self._time_from(start)
+        print "-> {}% Imgs ok".format(img_success)
         
         categorizations_count = self._categorize_articles(articles_categorizations)
         print "-> {} Articulos categorizados".format(categorizations_count)
@@ -191,7 +192,7 @@ class Command(BaseCommand):
         fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by', 'images')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
-        query = "SELECT {} FROM {}content LIMIT 1000".format(quoted_fields, self.table_prefix)
+        query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
         query = self._clean_list(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
@@ -208,10 +209,11 @@ class Command(BaseCommand):
             related_images, error_counter = self._parse_html_images(content_hash, article.pk, error_counter)
             articles_images.append(related_images)
         cursor.close()
-#        import pdb; pdb.set_trace()
         transaction.commit()
         transaction.leave_transaction_management()
-        return Article.objects.count(), articles_images, articles_categorizations
+        article_count = Article.objects.count()
+        img_success_percent = 100 - (error_counter * 100 / article_count)
+        return article_count, articles_images, articles_categorizations, img_success_percent
 
     def _fetch_collections(self, mysql_cnx):
         """Creates Collections infering them from Categories extensions."""
