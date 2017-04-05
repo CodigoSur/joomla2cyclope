@@ -186,10 +186,12 @@ class Command(BaseCommand):
         """Queries Joomla's _content table to populate Articles."""
         articles_images = []
         articles_categorizations = []
+        # a counter to know in which proportion are we retrieving html images
+        error_counter = 0
         fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by', 'images')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
-        query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
+        query = "SELECT {} FROM {}content LIMIT 1000".format(quoted_fields, self.table_prefix)
         query = self._clean_list(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
@@ -200,9 +202,13 @@ class Command(BaseCommand):
             article = self._content_to_article(content_hash)
             article.save()
             # this is here to have a single query to the largest table
+            # FIXME did I already benchmark this?
             articles_categorizations.append( self._categorize_object(article, content_hash['catid'], 'article') )
             articles_images.append( self._content_to_images(content_hash, article.pk) )
+            related_images, error_counter = self._parse_html_images(content_hash, article.pk, error_counter)
+            articles_images.append(related_images)
         cursor.close()
+#        import pdb; pdb.set_trace()
         transaction.commit()
         transaction.leave_transaction_management()
         return Article.objects.count(), articles_images, articles_categorizations
@@ -401,11 +407,13 @@ class Command(BaseCommand):
         if images['image_fulltext']:
             image_hash = {'src': images['image_fulltext'], 'alt': images['image_fulltext_alt'], 'article_id': article_id, 'image_type': 'article' }
             imagenes.append(image_hash)
+        return imagenes
 
-    # TODO OWN METHOD            
-        # instances images from content
+    def _parse_html_images(self, content_hash, article_id, error_counter):
+        """instances images from content's embedded <img> HTML tags."""
+        imagenes = []
         full_content = self._joomla_content(content_hash)
-        try: # x-treme hack! html.fromstring having ID collisions, collect_ids is not an option...
+        try: # FIXME x-treme hack! html.fromstring having ID collisions, collect_ids is not an option...
             context = etree.iterparse(BytesIO(full_content.encode('utf-8')), huge_tree=True, html=True)
             for action, elem in context: pass # just read it
             tree = context.root
@@ -417,8 +425,8 @@ class Command(BaseCommand):
                 image_hash = {'src': src, 'alt': alt, 'article_id': article_id, 'image_type': 'related'}
                 imagenes.append(image_hash)
         except:
-            pass # TODO contar %
-        return imagenes
+            error_counter += 1
+        return imagenes, error_counter
 
     def _bulk_relate_images(self, images):
         """images comming from content's image column will be article images,
