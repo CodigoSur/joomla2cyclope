@@ -95,12 +95,11 @@ class Command(BaseCommand):
     table_prefix = None
     joomla_password = None
     devel_url = False
-
     # menus
     _menu_category_view = 'teaser_list'
     _menu_category_view_options = '{"sort_by": "DATE+", "show_title": false, "show_description": false, "show_image": false, "items_per_page": 10, "limit_to_n_items": 0, "simplified": false, "traverse_children": true, "navigation": "DISABLED"}'
     _category_content_type = None
-
+    _article_content_type = None
     # categories
     _categories_collection = 1
     _tags_collection = 2   
@@ -112,6 +111,7 @@ class Command(BaseCommand):
         self.joomla_password = options['joomla_password']
         self.devel_url = options['devel']
         self._category_content_type = ContentType.objects.get(name='category').pk
+        self._article_content_type = ContentType.objects.get(name='article').pk
 
         # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
@@ -215,7 +215,7 @@ class Command(BaseCommand):
             article = self._content_to_article(content_hash)
             article.save()
             # this is here to have a single query to the largest table
-            articles_categorizations.append( self._categorize_object(article.pk, content_hash['catid'], 'article') )
+            articles_categorizations.append( self._categorize_object(article.pk, content_hash['catid'], self._article_content_type) )
             articles_images.append( self._content_to_images(content_hash, article.pk) )
             related_images, error_counter = self._parse_html_images(content_hash, article.pk, error_counter)
             articles_images.append(related_images)
@@ -309,11 +309,14 @@ class Command(BaseCommand):
         fields = ('type_alias', 'content_item_id', 'tag_id') # core_content_id (PK?), type_id (==type_alias), tag_date
         query = "SELECT {} FROM {}contentitem_tag_map".format(fields, self.table_prefix)
         query = self._clean_tuple(query)
+        cursor = mysql_cnx.cursor()
         cursor.execute(query)
-        for map_hash in cursor():
+        categorizations = []
+        for map_hash in cursor:
             categorization = self._tag_map_to_categorization(map_hash, min_id)
             categorizations.append(categorization)
         cursor.close()
+        categorizations = [cat for cat in categorizations if cat] # clean nulls
         categorization_count = self._mass_categorization(categorizations)
         return categorization_count
 
@@ -587,13 +590,13 @@ class Command(BaseCommand):
         cat_id = self._shift_min_id(map_hash['tag_id'], min_id)
         type_alias = map_hash['type_alias']
         if re.search('com_content.article', type_alias):
-            model = 'article'
-            return self._categorize_object(objeto, cat_id, model)
+            content_type_id = self._article_content_type
+            return self._categorize_object(objeto, cat_id, content_type_id)
 
-    def _categorize_object(self, objeto, cat_id, model):
+    def _categorize_object(self, objeto, cat_id, content_type_id):
         categorization = Categorization(
             category_id = cat_id,
-            content_type_id = ContentType.objects.get(model=model).pk, # FIXME
+            content_type_id = content_type_id,
             object_id = objeto
         )
         return categorization
