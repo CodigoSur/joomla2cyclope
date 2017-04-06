@@ -138,7 +138,9 @@ class Command(BaseCommand):
         print "-> {} Categorias migradas de Categorias Joomla".format(categories_count)
         self._time_from(start)
         
-        tags_count = self._fetch_categories_from_tags(cnx)
+        min_tag_id = self._fetch_min_id(cnx)
+
+        tags_count = self._fetch_categories_from_tags(cnx, min_tag_id)
         print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
         self._time_from(start)
 
@@ -147,9 +149,13 @@ class Command(BaseCommand):
         self._time_from(start)
         print "-> {}% Imgs ok".format(img_success)
         
-        categorizations_count = self._categorize_articles(articles_categorizations)
+        categorizations_count = self._mass_categorization(articles_categorizations)
         print "-> {} Articulos categorizados".format(categorizations_count)
         self._time_from(start)
+
+        tag_categorizations_count = self._fetch_categorizations_from_tag_map(cnx, min_tag_id)
+        tag_categorizations_count -= categorizations_count
+        print "-> {} Tags como categorizaciones".format(tag_categorizations_count)
         
         images_count, related_count, article_images_count = self._create_images(articles_images)
         print "-> {} Imagenes migradas".format(images_count)
@@ -198,7 +204,7 @@ class Command(BaseCommand):
         fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by', 'images')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
-        query = "SELECT {} FROM {}content LIMIT 100".format(quoted_fields, self.table_prefix)
+        query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
         query = self._clean_list(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
@@ -209,7 +215,7 @@ class Command(BaseCommand):
             article = self._content_to_article(content_hash)
             article.save()
             # this is here to have a single query to the largest table
-            articles_categorizations.append( self._categorize_object(article, content_hash['catid'], 'article') )
+            articles_categorizations.append( self._categorize_object(article.pk, content_hash['catid'], 'article') )
             articles_images.append( self._content_to_images(content_hash, article.pk) )
             related_images, error_counter = self._parse_html_images(content_hash, article.pk, error_counter)
             articles_images.append(related_images)
@@ -273,18 +279,21 @@ class Command(BaseCommand):
         categories += duplicates
         return categories
 
-    def _fetch_categories_from_tags(self, mysql_cnx):
-        """Migrate Joomla's Tags as Cyclopes Categories in a separate Collection.
-           Table content_item_tags_map is the equivalent of Categorizations."""
-        # we need to start from ids greater than categories ids or they will collide
+    def _fetch_min_id(self, mysql_cnx):
+        """we need this datum so that categories and tags ids don't collide"""
         cursor = mysql_cnx.cursor()
         query = "select max(id) as min_id from {}categories".format(self.table_prefix)
         cursor.execute(query)
         min_id = cursor.fetchone()['min_id']
-        # actual query to the tags table
+        return min_id
+
+    def _fetch_categories_from_tags(self, mysql_cnx, min_id):
+        """Migrate Joomla's Tags as Cyclopes Categories in a separate Collection.
+           Table content_item_tags_map is the equivalent of Categorizations."""
         fields = ('id', 'parent_id', 'lft', 'rgt', 'level', 'title', 'published') # note, description, urls, path, alias, created_time
         query = "SELECT {} FROM {}tags".format(fields, self.table_prefix)
         query = self._clean_tuple(query)
+        cursor = mysql_cnx.cursor()
         cursor.execute(query)
         categories = []
         for tag_hash in cursor:
@@ -296,6 +305,18 @@ class Command(BaseCommand):
         tag_count = Category.objects.filter(collection_id=self._tags_collection).count()
         return tag_count
 
+    def _fetch_categorizations_from_tag_map(self, mysql_cnx, min_id):
+        fields = ('type_alias', 'content_item_id', 'tag_id') # core_content_id (PK?), type_id (==type_alias), tag_date
+        query = "SELECT {} FROM {}contentitem_tag_map".format(fields, self.table_prefix)
+        query = self._clean_tuple(query)
+        cursor.execute(query)
+        for map_hash in cursor():
+            categorization = self._tag_map_to_categorization(map_hash, min_id)
+            categorizations.append(categorization)
+        cursor.close()
+        categorization_count = self._mass_categorization(categorizations)
+        return categorization_count
+
     def _create_images(self, images):
         images = [image[0] for image in images if image]
         for image_hash in images:
@@ -305,7 +326,7 @@ class Command(BaseCommand):
         self._bulk_relate_images(images)
         return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
 
-    def _categorize_articles(self, categorizations):
+    def _mass_categorization(self, categorizations):
         Categorization.objects.bulk_create(categorizations)
         return Categorization.objects.count()
 
@@ -561,11 +582,19 @@ class Command(BaseCommand):
         )
         return category
 
+    def _tag_map_to_categorization(self, map_hash, min_id):
+        objeto = map_hash['content_item_id']
+        cat_id = self._shift_min_id(map_hash['tag_id'], min_id)
+        type_alias = map_hash['type_alias']
+        if re.search('com_content.article', type_alias):
+            model = 'article'
+            return self._categorize_object(objeto, cat_id, model)
+
     def _categorize_object(self, objeto, cat_id, model):
         categorization = Categorization(
             category_id = cat_id,
-            content_type_id = ContentType.objects.get(model=model).pk,
-            object_id = objeto.pk
+            content_type_id = ContentType.objects.get(model=model).pk, # FIXME
+            object_id = objeto
         )
         return categorization
         
