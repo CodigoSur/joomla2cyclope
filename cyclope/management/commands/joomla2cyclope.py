@@ -128,15 +128,16 @@ class Command(BaseCommand):
         print "-> {} Items de Menu migrados.".format(menuitem_count)
         self._time_from(start)
         
-        collections_count = self._fetch_collections(cnx)
-        print "-> {} Colecciones creadas".format(collections_count)
-        self._time_from(start)
+        self._create_collections()
+        print "-> Colecciones creadas"
 
         categories_count = self._fetch_categories(cnx)
         print "-> {} Categorias migradas de Categorias Joomla".format(categories_count)
         self._time_from(start)
         
-        self._fetch_categories_from_tags(cnx)
+        tags_count = self._fetch_categories_from_tags(cnx)
+        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
+        self._time_from(start)
 
         articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx)
         print "-> {} Articulos migrados".format(articles_count)
@@ -217,23 +218,22 @@ class Command(BaseCommand):
         img_success_percent = 100 - (error_counter * 100 / article_count)
         return article_count, articles_images, articles_categorizations, img_success_percent
 
-    def _fetch_collections(self, mysql_cnx):
+    def _create_collections(self):
         """Creates Collections infering them from Categories extensions."""
-        query = "SELECT DISTINCT(extension) FROM {}categories".format(self.table_prefix)
-        cursor = mysql_cnx.cursor()
-        cursor.execute(query)
-        for extension in cursor:
-            collection = self._category_extension_to_collection(extension['extension'])
-            if collection:
-                collection.save()
-        cursor.close()
-        return Collection.objects.count()
+        contenidos = Collection.objects.create(id=1, name='Contenidos')
+        contenidos.content_types = [ContentType.objects.get(model='article')]
+        contenidos.save()
+        tags = Collection.objects.create(id=2, name='Tags')
+        tags.content_types = [ContentType.objects.get(model='article')] # TODO other types?
+        tags.save()
 
     def _fetch_categories(self, mysql_cnx):
         """Queries Joomla's categories table to populate Categories."""
         fields = ('id', 'path', 'title', 'alias', 'description', 'published', 'parent_id', 'lft', 'rgt', 'level', 'extension')
         query = "SELECT {} FROM {}categories".format(fields, self.table_prefix)
         query = self._clean_tuple(query)
+        # we are considering only categories for the Contents collection.
+        query += " WHERE extension = 'com_content'"
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
         categories = []
@@ -250,10 +250,10 @@ class Command(BaseCommand):
             categories = self._category_duplicates_uniqueness(mysql_cnx, categories)
             Category.objects.bulk_create(categories)
         Category.tree.rebuild()
-        category_count = Category.objects.filter(collection=collection).count()
+        category_count = Category.objects.filter(collection_id=1).count()
         return category_count
 
-    def _category_duplicates_uniqueness(mysql_cnx, categories):
+    def _category_duplicates_uniqueness(self, mysql_cnx, categories):
         """find duplicate names, since AutoSlugField doesn't properly preserve uniqueness in bulk."""
         cursor = mysql_cnx.cursor()
         query = "SELECT id FROM {}categories WHERE title IN (SELECT title FROM {}categories GROUP BY title HAVING COUNT(title) > 1)".format(self.table_prefix, self.table_prefix)
@@ -274,19 +274,24 @@ class Command(BaseCommand):
     def _fetch_categories_from_tags(self, mysql_cnx):
         """Migrate Joomla's Tags as Cyclopes Categories in a separate Collection.
            Table content_item_tags_map is the equivalent of Categorizations."""
+        # we need to start from ids greater than categories ids or they will collide
+        cursor = mysql_cnx.cursor()
+        query = "select max(id) as min_id from {}categories".format(self.table_prefix)
+        cursor.execute(query)
+        min_id = cursor.fetchone()['min_id']
+        # actual query to the tags table
         fields = ('id', 'parent_id', 'lft', 'rgt', 'level', 'title', 'published') # note, description, urls, path, alias, created_time
         query = "SELECT {} FROM {}tags".format(fields, self.table_prefix)
         query = self._clean_tuple(query)
-        cursor = mysql_cnx.cursor()
         cursor.execute(query)
-        tag_count = 0 #TODO
         categories = []
         for tag_hash in cursor:
-            category = self._tag_to_category(tag_hash)
+            category = self._tag_to_category(tag_hash, min_id)
             categories.append(category)
         cursor.close()
-        Category.objects.bulk_create(categories)
+        Category.objects.bulk_create(categories) # FIXME collision risk
         Category.tree.rebuild()
+        tag_count = Category.objects.filter(collection_id=2).count()
         return tag_count
 
     def _create_images(self, images):
@@ -375,13 +380,6 @@ class Command(BaseCommand):
         else:
             site.domain = "localhost:8000"
 
-    def _extension_to_collection(self, extension):
-        """Single mapping from Joomla extension to Cyclope collection."""
-        if extension == 'com_content':
-            return (1, 'Contenidos', ['article',])
-        else: # We might want to create other collections for newsfeeds, etc.
-            return (None, None, None)
-
     def _dup_categories_slugs(self, categories):
         #use a counter to differentiate them
         counter = 2
@@ -406,6 +404,13 @@ class Command(BaseCommand):
                         category.name = category.name + " (" + str(counter) + ")"
                 else : counter = 1
         return categories
+
+    def _shift_min_id(self, cat_id, min_id):
+        """this method is necessary because both Joomla's Categories and Tags are Categories in Cyclope.
+        we want to keep ids and their hierarchy, but we don't want them to collide, 
+        so tag ids start from the greatest of categories ids."""
+        result_id = cat_id + min_id
+        return result_id
 
     # JOOMLA'S LOGIC
 
@@ -520,43 +525,35 @@ class Command(BaseCommand):
         )
         return picture
 
-    def _category_extension_to_collection(self, extension):
-        """Instances a Collection from a Category extension."""
-        id, name, types = self._extension_to_collection(extension)
-        if id != None:
-            collection = Collection.objects.create(id=id, name=name)
-            collection.content_types = [ContentType.objects.get(model=content_type) for content_type in types]
-            return collection
-
     def _category_to_category(self, category_hash):
         """Instances a Category in Cyclope from Joomla's Categories table fields."""
-        collection_id, name, types = self._extension_to_collection(category_hash['extension'])
-        if collection_id: # bring categories for content only
-            return Category(
-                id = category_hash['id'], # keep ids for foreign keys
-                collection_id = collection_id,
-                name = category_hash['title'],
-                active = category_hash['published']==1,
-                parent_id = category_hash['parent_id'] if category_hash['parent_id'] != 0 else None,
-                # Cyclope and Joomla use the same tree algorithm
-                lft = category_hash['lft'],
-                rght = category_hash['rgt'],
-                level = category_hash['level'],
-                tree_id = category_hash['id'] # any value, overwritten by tree rebuild
-            )
-
-    def _tag_to_category(self, tag_hash):
         category = Category(
-            name = tag_hash['title'],
-            active = tag_hash['published']==1,
-            id = tag_hash['id'], # TODO WILL COLLIDE W/ categories !!!
-            parent_id = tag_hash['parent_id'],
-            collection_id = 0, # TODO
+            id = category_hash['id'], # keep ids for foreign keys
+            collection_id = 1, # Contenidos FIXME
+            name = category_hash['title'],
+            active = category_hash['published']==1,
+            parent_id = category_hash['parent_id'] if category_hash['parent_id'] != 0 else None,
             # Cyclope and Joomla use the same tree algorithm
             lft = category_hash['lft'],
             rght = category_hash['rgt'],
             level = category_hash['level'],
-            tree_id = 666, # any value, overwritten by tree rebuild
+            tree_id = category_hash['id'] # any value, overwritten by tree rebuild
+        )
+        return category
+
+    def _tag_to_category(self, tag_hash, min_id):
+        category_id = self._shift_min_id(tag_hash['id'], min_id)
+        parent_id = self._shift_min_id(tag_hash['parent_id'], min_id)
+        category = Category(
+            name = tag_hash['title'],
+            active = tag_hash['published']==1,
+            id = category_id,
+            parent_id = parent_id,
+            collection_id = 2, # Tags FIXME
+            lft = tag_hash['lft'],
+            rght = tag_hash['rgt'],
+            level = tag_hash['level'],
+            tree_id = 0, # any value, overwritten by tree rebuild
         )
         return category
 
