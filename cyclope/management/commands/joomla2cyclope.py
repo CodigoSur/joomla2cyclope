@@ -101,6 +101,9 @@ class Command(BaseCommand):
     _menu_category_view_options = '{"sort_by": "DATE+", "show_title": false, "show_description": false, "show_image": false, "items_per_page": 10, "limit_to_n_items": 0, "simplified": false, "traverse_children": true, "navigation": "DISABLED"}'
     _category_content_type = None
 
+    # categories
+    _categories_collection = 1
+    _tags_collection = 2   
     
     def handle(self, *args, **options):
         """Joomla to Cyclope database migration logic"""
@@ -195,7 +198,7 @@ class Command(BaseCommand):
         fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by', 'images')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
-        query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
+        query = "SELECT {} FROM {}content LIMIT 100".format(quoted_fields, self.table_prefix)
         query = self._clean_list(query)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
@@ -206,7 +209,6 @@ class Command(BaseCommand):
             article = self._content_to_article(content_hash)
             article.save()
             # this is here to have a single query to the largest table
-            # FIXME did I already benchmark this?
             articles_categorizations.append( self._categorize_object(article, content_hash['catid'], 'article') )
             articles_images.append( self._content_to_images(content_hash, article.pk) )
             related_images, error_counter = self._parse_html_images(content_hash, article.pk, error_counter)
@@ -250,7 +252,7 @@ class Command(BaseCommand):
             categories = self._category_duplicates_uniqueness(mysql_cnx, categories)
             Category.objects.bulk_create(categories)
         Category.tree.rebuild()
-        category_count = Category.objects.filter(collection_id=1).count()
+        category_count = Category.objects.filter(collection_id=self._categories_collection).count()
         return category_count
 
     def _category_duplicates_uniqueness(self, mysql_cnx, categories):
@@ -289,9 +291,9 @@ class Command(BaseCommand):
             category = self._tag_to_category(tag_hash, min_id)
             categories.append(category)
         cursor.close()
-        Category.objects.bulk_create(categories) # FIXME collision risk
+        Category.objects.bulk_create(categories)
         Category.tree.rebuild()
-        tag_count = Category.objects.filter(collection_id=2).count()
+        tag_count = Category.objects.filter(collection_id=self._tags_collection).count()
         return tag_count
 
     def _create_images(self, images):
@@ -529,7 +531,7 @@ class Command(BaseCommand):
         """Instances a Category in Cyclope from Joomla's Categories table fields."""
         category = Category(
             id = category_hash['id'], # keep ids for foreign keys
-            collection_id = 1, # Contenidos FIXME
+            collection_id = self._categories_collection, # Contenidos
             name = category_hash['title'],
             active = category_hash['published']==1,
             parent_id = category_hash['parent_id'] if category_hash['parent_id'] != 0 else None,
@@ -543,13 +545,15 @@ class Command(BaseCommand):
 
     def _tag_to_category(self, tag_hash, min_id):
         category_id = self._shift_min_id(tag_hash['id'], min_id)
-        parent_id = self._shift_min_id(tag_hash['parent_id'], min_id)
+        parent_id = self._tree_hierarchy(tag_hash['parent_id'])
+        if parent_id:
+            parent_id = self._shift_min_id(parent_id, min_id)
         category = Category(
             name = tag_hash['title'],
             active = tag_hash['published']==1,
             id = category_id,
             parent_id = parent_id,
-            collection_id = 2, # Tags FIXME
+            collection_id = self._tags_collection, # Tags
             lft = tag_hash['lft'],
             rght = tag_hash['rgt'],
             level = tag_hash['level'],
@@ -591,7 +595,7 @@ class Command(BaseCommand):
 
     def _menu_to_menuitem(self, menu_hash, menu_types):
         menu_id = self._menu_type_id(menu_types, menu_hash['menutype'])
-        parent_id = self._menu_hierarchy(menu_hash['parent_id'])
+        parent_id = self._tree_hierarchy(menu_hash['parent_id'])
         content_object_type, object_id = self._menu_content_object(menu_hash['link'])
         menuitem = MenuItem(
             id = menu_hash['id'],
@@ -614,11 +618,12 @@ class Command(BaseCommand):
 
     def _menu_to_menuitem_tree(self, menu_hash):
         menuitem = MenuItem.objects.get(pk=menu_hash['id'])
-        menuitem.parent_id = self._menu_hierarchy(menu_hash['parent_id'])
+        menuitem.parent_id = self._tree_hierarchy(menu_hash['parent_id'])
         return menuitem
 
-    def _menu_hierarchy(self, parent_id):
-        """0 is default value, and 1 is Menu Item Root, a Menu with no menutype"""
+    def _tree_hierarchy(self, parent_id):
+        """0 is default value, and 1 is Menu Item Root, a Menu with no menutype
+           the same logic is valid for Tags tree Root ids"""
         if parent_id != 0 and parent_id != 1:
             return parent_id
         return None
