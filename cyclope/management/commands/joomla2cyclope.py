@@ -1,4 +1,4 @@
-yrom django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand, CommandError
 from optparse import make_option
 import pymysql
 import re
@@ -156,11 +156,10 @@ class Command(BaseCommand):
         print "-> {} Categorias migradas de Categorias Joomla".format(categories_count)
         self._time_from(start)
         
-        min_tag_id = self._fetch_min_id(cnx)
-
-        tags_count = self._fetch_categories_from_tags(cnx, min_tag_id)
-        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
-        self._time_from(start)
+#        min_tag_id = self._fetch_min_id(cnx)
+#        tags_count = self._fetch_categories_from_tags(cnx, min_tag_id)
+#        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
+#        self._time_from(start)
 
         articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx, nlimit, offset)
         print "-> {} Articulos migrados".format(articles_count)
@@ -171,9 +170,9 @@ class Command(BaseCommand):
         print "-> {} Articulos categorizados".format(categorizations_count)
         self._time_from(start)
 
-        tag_categorizations_count = self._fetch_categorizations_from_tag_map(cnx, min_tag_id)
-        tag_categorizations_count -= categorizations_count
-        print "-> {} Tags como categorizaciones".format(tag_categorizations_count)
+#        tag_categorizations_count = self._fetch_categorizations_from_tag_map(cnx, min_tag_id)
+#        tag_categorizations_count -= categorizations_count
+#        print "-> {} Tags como categorizaciones".format(tag_categorizations_count)
         
         images_count, related_count, article_images_count = self._create_images(articles_images)
         print "-> {} Imagenes migradas".format(images_count)
