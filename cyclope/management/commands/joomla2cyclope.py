@@ -160,6 +160,7 @@ class Command(BaseCommand):
 #        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
 #        self._time_from(start)
 
+        print "-> Migrando articulos... (toma tiempo, con cafe)"
         articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx, nlimit, offset)
         print "-> {} Articulos migrados".format(articles_count)
         self._time_from(start)
