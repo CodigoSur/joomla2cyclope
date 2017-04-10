@@ -88,9 +88,21 @@ class Command(BaseCommand):
             dest='devel',
             help='Use http://localhost:8000 as site url (development)'
         ),
+        make_option('--limit',
+            action='store',
+            dest='limit',
+            default=None,
+            help='Limit Content query result to this ammount of rows.'
+        ),
+        make_option('--offset',
+            action='store',
+            dest='offset',
+            default=None,
+            help='Make Content query return results starting from this row number.'
+        ),
     )
     
-    # class constants
+    # CLASS CONSTANTS
     table_prefix = None
     joomla_password = None
     devel_url = False
@@ -108,7 +120,13 @@ class Command(BaseCommand):
         
         self.table_prefix = options['prefix']
         self.joomla_password = options['joomla_password']
-        self.devel_url = options['devel']
+        self.devel_url = options['devel'] # FIXME
+
+        nlimit = options['limit']
+        offset = options['offset']
+        if offset and not nlimit:
+            raise Exception("To specify an offset, the nlimit must be supplied too.")
+
         self._category_content_type = ContentType.objects.get(name='category').pk
         self._article_content_type = ContentType.objects.get(name='article').pk
 
@@ -137,13 +155,12 @@ class Command(BaseCommand):
         print "-> {} Categorias migradas de Categorias Joomla".format(categories_count)
         self._time_from(start)
         
-        min_tag_id = self._fetch_min_id(cnx)
+#        min_tag_id = self._fetch_min_id(cnx)
+#        tags_count = self._fetch_categories_from_tags(cnx, min_tag_id)
+#        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
+#        self._time_from(start)
 
-        tags_count = self._fetch_categories_from_tags(cnx, min_tag_id)
-        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
-        self._time_from(start)
-
-        articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx)
+        articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx, nlimit, offset)
         print "-> {} Articulos migrados".format(articles_count)
         self._time_from(start)
         print "-> {}% Imgs ok".format(img_success)
@@ -152,9 +169,9 @@ class Command(BaseCommand):
         print "-> {} Articulos categorizados".format(categorizations_count)
         self._time_from(start)
 
-        tag_categorizations_count = self._fetch_categorizations_from_tag_map(cnx, min_tag_id)
-        tag_categorizations_count -= categorizations_count
-        print "-> {} Tags como categorizaciones".format(tag_categorizations_count)
+#        tag_categorizations_count = self._fetch_categorizations_from_tag_map(cnx, min_tag_id)
+#        tag_categorizations_count -= categorizations_count
+#        print "-> {} Tags como categorizaciones".format(tag_categorizations_count)
         
         images_count, related_count, article_images_count = self._create_images(articles_images)
         print "-> {} Imagenes migradas".format(images_count)
@@ -194,7 +211,7 @@ class Command(BaseCommand):
         cursor.close()
         return User.objects.count()
 
-    def _fetch_content(self, mysql_cnx):
+    def _fetch_content(self, mysql_cnx, nlimit, offset):
         """Queries Joomla's _content table to populate Articles."""
         articles_images = []
         articles_categorizations = []
@@ -205,6 +222,7 @@ class Command(BaseCommand):
         quoted_fields = ["`{}`".format(field) for field in fields]
         query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
         query = self._clean_list(query)
+        query = self._limit_query(query, nlimit, offset)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
         #single transaction for all articles
@@ -394,6 +412,14 @@ class Command(BaseCommand):
         now = time.time()
         ellapsed = now - start 
         print( "%.2f s" % ellapsed )
+
+    def _limit_query(self, query, nlimit, offset):
+        """Adds SQL Limit/Offset syntax to limit queries to return only nlimit rows starting from offset."""
+        if nlimit:
+            query +=  " LIMIT {}".format(nlimit)
+        if offset:
+            query += " OFFSET {}".format(offset)
+        return query
 
     # CYCLOPE'S LOGIC
 
