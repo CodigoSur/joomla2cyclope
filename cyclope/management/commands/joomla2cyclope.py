@@ -561,6 +561,8 @@ class Command(BaseCommand):
         if not text:
             return None
         article = Article(
+            # TODO id = content['id'],
+            # TODO slug = content['alias'] or slugify(content['path']) 4URLs
             name = content['title'],
             creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
@@ -655,27 +657,31 @@ class Command(BaseCommand):
         """Logica de redecom.com.ar respecto a la separacion del copete y el cuerpo del texto.
            90% de las notas en Joomla consta de ambas columnas introtext & fulltext, estas corresponden a summary & text en Cyclope
            En el 10% restante intentamos identificar las clases CSS bajada y cuerponota.
-           Este diez se reparte en un 7% que solo tienen introtext (de estos casi ninguno tiene las clases CSS),
-           y en un 3% que solo tienen fulltext (de estos la mayoria tiene las clases CSS). 
-           (No tiene sentido en el Read More de Joomla que solo haya texto en fulltext).
-           Asi estamos separando el 92% de los articulos aprox en summary y text."""
+           Este diez se reparte en un 7% que solo tienen introtext (de estos 65% aprox tiene la clase CSS 'bajada'),
+           y en un 3% que solo tienen fulltext (de estos casi ninguno tiene la clase CSS 'bajada'). 
+           La clase CSS 'cuerponota' se repite y mas que sematico probablemente tenga un significado estetico.
+           Asi estamos separando el 96% de los articulos aprox en summary y text.
+           NOTE:
+           - Que sentido en la funcionalidad Read More de Joomla tiene que solo haya texto en fulltext?
+           - Cuando se puede separar por ambos introtext/fulltext, en el 70% de los casos coincide con la clase bajada en el introtext
+        """
+        summary, text = None, None
         introtext = content_hash['introtext']
         fulltext = content_hash['fulltext']
         if introtext and fulltext:
-            return (introtext, fulltext)
+            summary = introtext
+            text = fulltext
         elif introtext:
-            return self._redeco_css_bajada(introtext) # TODO cuerponota
+            summary, text = self._redeco_css_bajada(introtext)
         elif fulltext:
-            return self._redeco_css_bajada(fulltext)  # idem
-        else:
-            return ("","")
+            summary, text = self._redeco_css_bajada(fulltext)
+        return summary, text
 
     def _redeco_css_bajada(self, content):
         """interpreta el contenido de un articulo como html.
            si encuentra una etiqueta con la clase bajada, la extrae como el summary, separandolo del text."""
         summary, text = None, None
         tree = html.fromstring(content)
-        bajada = tree.xpath("*[@class='bajada']")
         if re.search('class="bajada"', content):
             sel = CSSSelector('.bajada')
             bajada = sel(tree)[0]
