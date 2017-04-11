@@ -231,6 +231,8 @@ class Command(BaseCommand):
         transaction.managed(True)
         for content_hash in cursor:
             article = self._content_to_article(content_hash)
+            if not article:
+                continue
             article.save()
             # this is here to have a single query to the largest table
             articles_categorizations.append( self._categorize_object(article.pk, content_hash['catid'], self._article_content_type) )
@@ -555,7 +557,9 @@ class Command(BaseCommand):
         """Instances an Article object from a Content hash."""
         article_content = self._joomla_content(content)
         # especifico redecom.com.ar
-        summary, text = self._redeco_text_logic(article_content)
+        summary, text = self._redeco_text_logic(content)
+        if not text:
+            return None
         article = Article(
             name = content['title'],
             creation_date = content['created'] if content['created'] else datetime.now(),
@@ -647,10 +651,28 @@ class Command(BaseCommand):
         user.set_password(password)
         return user
 
-    def _redeco_text_logic(self, content):
-        """Logica de redecom.com.ar en html traducida a columnas Cyclope.
-           61% de articulos se divien en bajada y cuerpo nota,
-           se trata ya sea de parrafos o spans con estas clases."""
+    def _redeco_text_logic(self, content_hash):
+        """Logica de redecom.com.ar respecto a la separacion del copete y el cuerpo del texto.
+           90% de las notas en Joomla consta de ambas columnas introtext & fulltext, estas corresponden a summary & text en Cyclope
+           En el 10% restante intentamos identificar las clases CSS bajada y cuerponota.
+           Este diez se reparte en un 7% que solo tienen introtext (de estos casi ninguno tiene las clases CSS),
+           y en un 3% que solo tienen fulltext (de estos la mayoria tiene las clases CSS). 
+           (No tiene sentido en el Read More de Joomla que solo haya texto en fulltext).
+           Asi estamos separando el 92% de los articulos aprox en summary y text."""
+        introtext = content_hash['introtext']
+        fulltext = content_hash['fulltext']
+        if introtext and fulltext:
+            return (introtext, fulltext)
+        elif introtext:
+            return self._redeco_css_bajada(introtext) # TODO cuerponota
+        elif fulltext:
+            return self._redeco_css_bajada(fulltext)  # idem
+        else:
+            return ("","")
+
+    def _redeco_css_bajada(self, content):
+        """interpreta el contenido de un articulo como html.
+           si encuentra una etiqueta con la clase bajada, la extrae como el summary, separandolo del text."""
         summary, text = None, None
         tree = html.fromstring(content)
         bajada = tree.xpath("*[@class='bajada']")
