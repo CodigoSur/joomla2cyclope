@@ -218,7 +218,7 @@ class Command(BaseCommand):
         articles_categorizations = []
         # a counter to know in which proportion are we retrieving html images
         error_counter = 0
-        fields = ('title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by', 'images')
+        fields = ('id', 'title', 'alias', 'introtext', 'fulltext', 'created', 'modified', 'state', 'catid', 'created_by', 'images')
         # we need to quote field names because fulltext is a reserved mysql keyword
         quoted_fields = ["`{}`".format(field) for field in fields]
         query = "SELECT {} FROM {}content".format(quoted_fields, self.table_prefix)
@@ -554,6 +554,8 @@ class Command(BaseCommand):
     def _content_to_article(self, content):
         """Instances an Article object from a Content hash."""
         article = Article(
+            id = content['id'],
+            # TODO content['alias'] or slugify(content['path']) 4URLs
             name = content['title'],
             creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
