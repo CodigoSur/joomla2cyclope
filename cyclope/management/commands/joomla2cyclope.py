@@ -509,6 +509,12 @@ class Command(BaseCommand):
             error_counter += 1
         return imagenes, error_counter
 
+    def _joomla_slugify(self, pk, alias):
+        """joomla's URLs consist of the primary-key followed by a hyphen and the alias"""
+        pk_str = str(pk)
+        slug = '-'.join((pk_str, alias))
+        return slug
+
     def _bulk_relate_images(self, images):
         """images comming from content's image column will be article images,
            images comming from within the article's content will be just related contents."""
@@ -550,7 +556,7 @@ class Command(BaseCommand):
 
     def _content_to_article(self, content):
         """Instances an Article object from a Content hash."""
-        slug = '-'.join((str(content['id']), content['alias']))
+        slug = self._joomla_slugify(content['id'], content['alias'])
         article = Article(
             id = content['id'],
             slug = slug,
@@ -569,10 +575,13 @@ class Command(BaseCommand):
         alt = image_hash['alt'] if image_hash['alt'] else ""
         name = src.split('/')[-1].split('.')[0] # get rid of path and extension
         name = slugify(name)
+        # we don't really care about image's slugs, and article_id can be useful
+        slug = self._joomla_slugify(image_hash['article_id'], name)
         picture = Picture(
             image = src,
             description = alt,
             name = name,
+            slug = slug,
             # creation_date = post['post_date'], article
         )
         return picture
