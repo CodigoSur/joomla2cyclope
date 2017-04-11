@@ -214,6 +214,7 @@ class Command(BaseCommand):
 
     def _fetch_content(self, mysql_cnx, nlimit, offset):
         """Queries Joomla's _content table to populate Articles."""
+        articles = []
         articles_images = []
         articles_categorizations = []
         # a counter to know in which proportion are we retrieving html images
@@ -226,22 +227,18 @@ class Command(BaseCommand):
         query = self._limit_query(query, nlimit, offset)
         cursor = mysql_cnx.cursor()
         cursor.execute(query)
-        #single transaction for all articles
-        transaction.enter_transaction_management()
-        transaction.managed(True)
         for content_hash in cursor:
             article = self._content_to_article(content_hash)
             if not article:
                 continue
-            article.save()
+            articles.append(article)
             # this is here to have a single query to the largest table
             articles_categorizations.append( self._categorize_object(article.pk, content_hash['catid'], self._article_content_type) )
             articles_images.append( self._content_to_images(content_hash, article.pk) )
             related_images, error_counter = self._parse_html_images(content_hash, article.pk, error_counter)
             articles_images.append(related_images)
         cursor.close()
-        transaction.commit()
-        transaction.leave_transaction_management()
+        Article.objects.bulk_create(articles)
         article_count = Article.objects.count()
         img_success_percent = 100 - (error_counter * 100 / article_count)
         return article_count, articles_images, articles_categorizations, img_success_percent
@@ -535,7 +532,7 @@ class Command(BaseCommand):
             article_images_query =  self._clean_list(article_images_query)
             self._raw_sqlite_execute(article_images_query)
         if related_images:
-            related_content_query = "INSERT INTO cyclope_relatedcontent ('self_type_id', 'self_id', 'other_type_id', 'other_id') VALUES {}".format(related_images)
+            related_content_query = "INSERT INTO cyclope_relatedcontent ('self_type_id', 'self_id', 'other_type_id', 'other_id') VALUES {}".format(related_images) # TODO MAX < 1000 tuples
             related_content_query = self._clean_list(related_content_query)
             self._raw_sqlite_execute(related_content_query)
 
@@ -555,14 +552,13 @@ class Command(BaseCommand):
 
     def _content_to_article(self, content):
         """Instances an Article object from a Content hash."""
-        article_content = self._joomla_content(content)
-        # especifico redecom.com.ar
         summary, text = self._redeco_text_logic(content)
         if not text:
             return None
+        slug = '-'.join((str(content['id']), content['alias'])) # FIXME function
         article = Article(
             id = content['id'],
-            # TODO content['alias'] or slugify(content['path']) 4URLs
+            slug = slug,
             name = content['title'],
             creation_date = content['created'] if content['created'] else datetime.now(),
             modification_date = content['modified'],
