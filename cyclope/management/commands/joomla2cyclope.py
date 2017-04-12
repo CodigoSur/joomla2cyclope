@@ -336,13 +336,34 @@ class Command(BaseCommand):
         return categorization_count
 
     def _create_images(self, images):
-        images = [image[0] for image in images if image]
+        images = [image[0] for image in images if image] # FIXME
+        # massive picture creation
+        pictures = []
         for image_hash in images:
             picture = self._image_to_picture(image_hash)
-            picture.save() # n-queries, but resolves slug uniqueness FIXME
-            image_hash['picture_id'] = picture.pk
-        self._bulk_relate_images(images)
+            picture.description = self._pic_info_to_description(image_hash['article_id'], image_hash['image_type'])
+            pictures.append(picture)
+        Picture.objects.bulk_create(pictures)
+        # retrieve relation from description
+        pic_relations = []
+        for pic in Picture.objects.all():
+            article_id, image_type = self._pic_info_from_description(pic.description)
+            relation = {'picture_id': pic.pk, 'article_id': article_id, 'image_type': image_type}
+            pic_relations.append(relation)
+        # pass relations to queries
+        self._bulk_relate_images(pic_relations)
+        # TODO CLEAN descriptions
         return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
+
+    def _pic_info_to_description(self, article_id, image_type):
+        to_json = {'article_id': article_id, 'image_type': image_type}
+        return json.dumps(to_json)
+
+    def _pic_info_from_description(self, description):
+        info_hash = json.loads(description)
+        article_id = info_hash['article_id']
+        image_type = info_hash['image_type']
+        return article_id, image_type
 
     def _mass_categorization(self, categorizations):
         Categorization.objects.bulk_create(categorizations)
