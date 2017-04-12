@@ -557,9 +557,11 @@ class Command(BaseCommand):
             article_images_query =  self._clean_list(article_images_query)
             self._raw_sqlite_execute(article_images_query)
         if related_images:
-            related_content_query = "INSERT INTO cyclope_relatedcontent ('self_type_id', 'self_id', 'other_type_id', 'other_id') VALUES {}".format(related_images) # TODO MAX < 1000 tuples
-            related_content_query = self._clean_list(related_content_query)
-            self._raw_sqlite_execute(related_content_query)
+            related_images_chunks = list(self._split_large_inserts(related_images))
+            for related_images_chunk in related_images_chunks:
+                related_content_query = "INSERT INTO cyclope_relatedcontent ('self_type_id', 'self_id', 'other_type_id', 'other_id') VALUES {}".format(related_images_chunk)
+                related_content_query = self._clean_list(related_content_query)
+                self._raw_sqlite_execute(related_content_query)
 
     def _raw_sqlite_execute(self, query):
         sqlite = connection.cursor()
@@ -568,6 +570,13 @@ class Command(BaseCommand):
             connection.commit()
         finally:
             sqlite.close()
+
+    def _split_large_inserts(self, dataset):
+        """split INSERT VALUES into chunks of 500, that is SQLite's SQLITE_MAX_COMPOUND_SELECT limit in v.3.7
+           returns a generator, which must be instanced for ex. by the list() function"""
+        n = 500
+        for i in xrange(0, len(dataset), n):
+            yield dataset[i:i+n]
 
     def _menu_type_id(self, menu_types, menutype):
         if menu_types.has_key(menutype):
