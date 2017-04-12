@@ -374,11 +374,11 @@ class Command(BaseCommand):
         for key in slush.iterkeys(): slush[key]=[]
         for i, pic in enumerate(pictures):
             if pic.slug in duplicate_slugs:
-                slush[pic.slug].append(i)
-        # remove from pictures all pictures in each group, except the first one
-        for indexes in slush.values():
-            for indx in indexes[1:]:
-                pictures.pop(indx)
+                # remove from list immediately, before list indexes are updated FIXME
+                if slush[pic.slug]:
+                    pictures.pop(i)
+                else:
+                    slush[pic.slug].append(i)
         return pictures
 
     def _pic_info_to_description(self, article_id, image_type):
