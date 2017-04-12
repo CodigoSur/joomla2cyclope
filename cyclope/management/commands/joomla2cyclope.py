@@ -355,7 +355,8 @@ class Command(BaseCommand):
             pic_relations.append(relation)
         # pass relations to queries
         self._bulk_relate_images(pic_relations)
-        # TODO CLEAN descriptions
+        # clean descriptions
+        Picture.objects.all().update(description='')
         return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
 
     def _duplicate_pictures_removal(self, pictures):
