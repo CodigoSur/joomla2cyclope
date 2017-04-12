@@ -18,6 +18,7 @@ from lxml.cssselect import CSSSelector
 import json
 from io import BytesIO
 import time
+from collections import Counter
 
 class Command(BaseCommand):
     help = """
@@ -155,10 +156,10 @@ class Command(BaseCommand):
         print "-> {} Categorias migradas de Categorias Joomla".format(categories_count)
         self._time_from(start)
         
-#        min_tag_id = self._fetch_min_id(cnx)
-#        tags_count = self._fetch_categories_from_tags(cnx, min_tag_id)
-#        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
-#        self._time_from(start)
+        min_tag_id = self._fetch_min_id(cnx)
+        tags_count = self._fetch_categories_from_tags(cnx, min_tag_id)
+        print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
+        self._time_from(start)
 
         print "-> Migrando articulos... (toma tiempo, con cafe)"
         articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx, nlimit, offset)
@@ -170,9 +171,9 @@ class Command(BaseCommand):
         print "-> {} Articulos categorizados".format(categorizations_count)
         self._time_from(start)
 
-#        tag_categorizations_count = self._fetch_categorizations_from_tag_map(cnx, min_tag_id)
-#        tag_categorizations_count -= categorizations_count
-#        print "-> {} Tags como categorizaciones".format(tag_categorizations_count)
+        tag_categorizations_count = self._fetch_categorizations_from_tag_map(cnx, min_tag_id)
+        tag_categorizations_count -= categorizations_count
+        print "-> {} Tags como categorizaciones".format(tag_categorizations_count)
         
         images_count, related_count, article_images_count = self._create_images(articles_images)
         print "-> {} Imagenes migradas".format(images_count)
@@ -338,13 +339,61 @@ class Command(BaseCommand):
         return categorization_count
 
     def _create_images(self, images):
-        images = [image[0] for image in images if image]
+        images = [image[0] for image in images if image] # FIXME
+        # massive picture creation
+        pictures = []
         for image_hash in images:
             picture = self._image_to_picture(image_hash)
-            picture.save() # n-queries, but resolves slug uniqueness FIXME
-            image_hash['picture_id'] = picture.pk
-        self._bulk_relate_images(images)
+            picture.description = self._pic_info_to_description(image_hash['article_id'], image_hash['image_type'])
+            pictures.append(picture)
+        # clean duplicate slugs
+        pictures = self._duplicate_pictures_removal(pictures)
+        # bulk insert
+        Picture.objects.bulk_create(pictures)
+        # retrieve relation from description
+        pic_relations = []
+        for pic in Picture.objects.all():
+            article_id, image_type = self._pic_info_from_description(pic.description)
+            relation = {'picture_id': pic.pk, 'article_id': article_id, 'image_type': image_type}
+            pic_relations.append(relation)
+        # pass relations to queries
+        self._bulk_relate_images(pic_relations)
+        # clean descriptions
+        Picture.objects.all().update(description='')
         return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
+
+    def _duplicate_pictures_removal(self, pictures):
+        """for bulk picture creation we treat here duplicate pictures slugs.
+           since we are using article id and img src for slugs, duplicate slugs are really duplicate pictures,
+           so we just remove them. there could be other strategies whenever it makes sense.
+           therefore we groupi pictures indexes by slug (there is no pk yet), 
+           removing all but the first of each group (original one).
+           using collections.Counter is supposed to perform O(n).
+           """
+        # count slugs appearing more than once
+        duplicate_slugs = [slug for slug, count in Counter([pic.slug for pic in pictures]).items() if count > 1]
+        # find the index in this list for pictures with duplicate slugs, grouped by slug
+        slush = {}
+        slush = slush.fromkeys(duplicate_slugs)
+        for key in slush.iterkeys(): slush[key]=[]
+        for i, pic in enumerate(pictures):
+            if pic.slug in duplicate_slugs:
+                # remove from list immediately, before list indexes are updated FIXME
+                if slush[pic.slug]:
+                    pictures.pop(i)
+                else:
+                    slush[pic.slug].append(i)
+        return pictures
+
+    def _pic_info_to_description(self, article_id, image_type):
+        to_json = {'article_id': article_id, 'image_type': image_type}
+        return json.dumps(to_json)
+
+    def _pic_info_from_description(self, description):
+        info_hash = json.loads(description)
+        article_id = info_hash['article_id']
+        image_type = info_hash['image_type']
+        return article_id, image_type
 
     def _mass_categorization(self, categorizations):
         Categorization.objects.bulk_create(categorizations)
@@ -511,6 +560,12 @@ class Command(BaseCommand):
             error_counter += 1
         return imagenes, error_counter
 
+    def _joomla_slugify(self, pk, alias):
+        """joomla's URLs consist of the primary-key followed by a hyphen and the alias"""
+        pk_str = str(pk)
+        slug = '-'.join((pk_str, alias))
+        return slug
+
     def _bulk_relate_images(self, images):
         """images comming from content's image column will be article images,
            images comming from within the article's content will be just related contents."""
@@ -528,13 +583,17 @@ class Command(BaseCommand):
                 related_tuple = (article_type_id, article_id, picture_type_id, picture_id)
                 related_images.append(related_tuple)
         if article_images:
-            article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images)
-            article_images_query =  self._clean_list(article_images_query)
-            self._raw_sqlite_execute(article_images_query)
+            article_images_chunks = self._split_large_inserts(article_images)
+            for article_images_chunk in article_images_chunks:
+                article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images_chunk)
+                article_images_query =  self._clean_list(article_images_query)
+                self._raw_sqlite_execute(article_images_query)
         if related_images:
-            related_content_query = "INSERT INTO cyclope_relatedcontent ('self_type_id', 'self_id', 'other_type_id', 'other_id') VALUES {}".format(related_images) # TODO MAX < 1000 tuples
-            related_content_query = self._clean_list(related_content_query)
-            self._raw_sqlite_execute(related_content_query)
+            related_images_chunks = list(self._split_large_inserts(related_images))
+            for related_images_chunk in related_images_chunks:
+                related_content_query = "INSERT INTO cyclope_relatedcontent ('self_type_id', 'self_id', 'other_type_id', 'other_id') VALUES {}".format(related_images_chunk)
+                related_content_query = self._clean_list(related_content_query)
+                self._raw_sqlite_execute(related_content_query)
 
     def _raw_sqlite_execute(self, query):
         sqlite = connection.cursor()
@@ -543,6 +602,13 @@ class Command(BaseCommand):
             connection.commit()
         finally:
             sqlite.close()
+
+    def _split_large_inserts(self, dataset):
+        """split INSERT VALUES into chunks of 500, that is SQLite's SQLITE_MAX_COMPOUND_SELECT limit in v.3.7
+           returns a generator, which must be instanced for ex. by the list() function"""
+        n = 500
+        for i in xrange(0, len(dataset), n):
+            yield dataset[i:i+n]
 
     def _menu_type_id(self, menu_types, menutype):
         if menu_types.has_key(menutype):
@@ -555,7 +621,7 @@ class Command(BaseCommand):
         summary, text = self._redeco_text_logic(content)
         if not text:
             return None
-        slug = '-'.join((str(content['id']), content['alias'])) # FIXME function
+        slug = self._joomla_slugify(content['id'], content['alias'])
         article = Article(
             id = content['id'],
             slug = slug,
@@ -575,11 +641,14 @@ class Command(BaseCommand):
         alt = image_hash['alt'] if image_hash['alt'] else ""
         name = src.split('/')[-1].split('.')[0] # get rid of path and extension
         name = slugify(name)
+        # we don't really care about image's slugs, and article_id can be useful
+        slug = self._joomla_slugify(image_hash['article_id'], name)
         picture = Picture(
             image = src,
             description = alt,
             name = name,
-            # creation_date = post['post_date'], article
+            slug = slug,
+            # creation_date = post['post_date']
         )
         return picture
 
