@@ -18,7 +18,7 @@ from lxml.cssselect import CSSSelector
 import json
 from io import BytesIO
 import time
-
+from collections import Counter
 
 class Command(BaseCommand):
     help = """
@@ -343,6 +343,9 @@ class Command(BaseCommand):
             picture = self._image_to_picture(image_hash)
             picture.description = self._pic_info_to_description(image_hash['article_id'], image_hash['image_type'])
             pictures.append(picture)
+        # clean duplicate slugs
+        pictures = self._duplicate_pictures_removal(pictures)
+        # bulk insert
         Picture.objects.bulk_create(pictures)
         # retrieve relation from description
         pic_relations = []
@@ -354,6 +357,29 @@ class Command(BaseCommand):
         self._bulk_relate_images(pic_relations)
         # TODO CLEAN descriptions
         return Picture.objects.count(), RelatedContent.objects.count(), Article.objects.exclude(pictures=None).count()
+
+    def _duplicate_pictures_removal(self, pictures):
+        """for bulk picture creation we treat here duplicate pictures slugs.
+           since we are using article id and img src for slugs, duplicate slugs are really duplicate pictures,
+           so we just remove them. there could be other strategies whenever it makes sense.
+           therefore we groupi pictures indexes by slug (there is no pk yet), 
+           removing all but the first of each group (original one).
+           using collections.Counter is supposed to perform O(n).
+           """
+        # count slugs appearing more than once
+        duplicate_slugs = [slug for slug, count in Counter([pic.slug for pic in pictures]).items() if count > 1]
+        # find the index in this list for pictures with duplicate slugs, grouped by slug
+        slush = {}
+        slush = slush.fromkeys(duplicate_slugs)
+        for key in slush.iterkeys(): slush[key]=[]
+        for i, pic in enumerate(pictures):
+            if pic.slug in duplicate_slugs:
+                slush[pic.slug].append(i)
+        # remove from pictures all pictures in each group, except the first one
+        for indexes in slush.values():
+            for indx in indexes[1:]:
+                pictures.pop(indx)
+        return pictures
 
     def _pic_info_to_description(self, article_id, image_type):
         to_json = {'article_id': article_id, 'image_type': image_type}
@@ -612,7 +638,7 @@ class Command(BaseCommand):
             description = alt,
             name = name,
             slug = slug,
-            # creation_date = post['post_date'], article
+            # creation_date = post['post_date']
         )
         return picture
 
