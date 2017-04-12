@@ -579,9 +579,11 @@ class Command(BaseCommand):
                 related_tuple = (article_type_id, article_id, picture_type_id, picture_id)
                 related_images.append(related_tuple)
         if article_images:
-            article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images)
-            article_images_query =  self._clean_list(article_images_query)
-            self._raw_sqlite_execute(article_images_query)
+            article_images_chunks = self._split_large_inserts(article_images)
+            for article_images_chunk in article_images_chunks:
+                article_images_query = "INSERT INTO articles_article_pictures ('article_id', 'picture_id') VALUES {}".format(article_images_chunk)
+                article_images_query =  self._clean_list(article_images_query)
+                self._raw_sqlite_execute(article_images_query)
         if related_images:
             related_images_chunks = list(self._split_large_inserts(related_images))
             for related_images_chunk in related_images_chunks:
