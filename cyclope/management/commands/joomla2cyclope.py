@@ -736,6 +736,10 @@ class Command(BaseCommand):
         if introtext and fulltext:
             summary = introtext
             text = fulltext
+            # correccion de cierres en bd redeco, muchos cierran los tags en la columna fulltext
+            text, apendix = self._correccion_cierre(text)
+            if apendix:
+                summary += apendix 
         elif introtext:
             summary, text = self._redeco_css_bajada(introtext)
         elif fulltext:
@@ -760,6 +764,20 @@ class Command(BaseCommand):
             return summary, text
         else:
             return "", content    
+
+    def _correccion_cierre(self, text):
+        """especifico para la bd de redeco.com.ar
+           1183 registros cierran en fulltext las etiquetas que abren en introtext
+           retornamos el texto limpio, y tambien las etiquetas de cierre, si se hallan,
+           estas son 'devueltas' a la columna introtext."""
+        regex = "^(\s*<\s*/[a-zA-Z]+\s*>)+"
+        match = re.search(regex, text)
+        if match:
+            apendix = match.group()
+            end = match.end()
+            clean_text = text[match.end():]
+            return clean_text, apendix
+        return text, None
 
     def _menu_type_to_menu(self, menu_type_hash):
         menu = Menu(
