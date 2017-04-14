@@ -744,6 +744,11 @@ class Command(BaseCommand):
             summary, text = self._redeco_css_bajada(introtext)
         elif fulltext:
             summary, text = self._redeco_css_bajada(fulltext)
+        # limpiar breaks al inicio y al final
+        if summary:
+            summary = self._clean_html_breaks(summary)
+        if text:
+            text = self._clean_html_breaks(text)
         return summary, text
 
     def _redeco_css_bajada(self, content):
@@ -778,6 +783,18 @@ class Command(BaseCommand):
             clean_text = text[match.end():]
             return clean_text, apendix
         return text, None
+
+    def _clean_html_breaks(self, txt):
+        """limpia las etiquetas <br /> del principio y del final"""
+        regex_start = "^(\s*<br\s?/>)+"
+        match_start = re.search(regex_start, txt)
+        regex_end = "(<br\s?/>\s*)+$"
+        match_end = re.search(regex_end, txt)
+        if match_start:
+            txt = txt[match_start.end():]
+        if match_end:
+            txt = txt[:match_end.start()]
+        return txt
 
     def _menu_type_to_menu(self, menu_type_hash):
         menu = Menu(
