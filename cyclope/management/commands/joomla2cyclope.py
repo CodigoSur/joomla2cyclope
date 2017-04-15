@@ -344,6 +344,8 @@ class Command(BaseCommand):
         pictures = []
         for image_hash in images:
             picture = self._image_to_picture(image_hash)
+            if not picture:
+                continue
             picture.description = self._pic_info_to_description(image_hash['article_id'], image_hash['image_type'])
             pictures.append(picture)
         # clean duplicate slugs
@@ -637,18 +639,19 @@ class Command(BaseCommand):
         return article
 
     def _image_to_picture(self, image_hash):
-        src = image_hash['src']
+        src = self._sanitize_img_src(image_hash['src'])
+        if not src: # NOTE img con src externo podrian ser ExternalContent?
+            return None
         alt = image_hash['alt'] if image_hash['alt'] else ""
         name = src.split('/')[-1].split('.')[0] # get rid of path and extension
-        name = slugify(name)
+        name = slugify(name) # TODO name, alt
         # we don't really care about image's slugs, and article_id can be useful
         slug = self._joomla_slugify(image_hash['article_id'], name)
         picture = Picture(
             image = src,
-            description = alt,
             name = name,
             slug = slug,
-            # creation_date = post['post_date']
+            # creation_date = post['post_date'] TODO
         )
         return picture
 
@@ -717,6 +720,8 @@ class Command(BaseCommand):
         password = self.joomla_password if self.joomla_password else user.username
         user.set_password(password)
         return user
+
+    # BEGIN redeco.com.ar
 
     def _redeco_text_logic(self, content_hash):
         """Logica de redecom.com.ar respecto a la separacion del copete y el cuerpo del texto.
@@ -795,6 +800,28 @@ class Command(BaseCommand):
         if match_end:
             txt = txt[:match_end.start()]
         return txt
+
+    def _sanitize_img_src(self, src):
+        """sanitize img URLs in redeco.com.ar, most of the corrections needed are relativizing canonical URLs
+           75,5% de los src estan bien, 23,5% tienen URL canonica, la cual relativizamos.
+           1% son src a sitios externos, los cuales descartamos.
+           tambien descartamos 12 excepciones en www.redeco.com.ar/ana y www.redeco.com.ar/opinion"""
+        regex_ok = "^images/"
+        regex_canonical = "^(http://)?(www.redeco.com.ar/)"
+        if re.search(regex_ok, src): # images/etc/img.png -> /media/images/etc/img.png
+            return src # 75,5%
+        match_canonical = re.search(regex_canonical, src)
+        if match_canonical: # 23,5%
+            regex_nv = regex_canonical + "nv/"
+            match_nv = re.search(regex_nv, src)
+            if match_nv: # (http://)www.redeco.com.ar/nv/images/etc/img.png -> /media/images/etc/img.png 
+                 src = src[match_nv.end():]
+                 return src
+            else: # www.redeco.com.ar/ana/ www.redeco.com.ar/opinion/ se descartan
+                return None
+        return None # 1%, src externos
+
+    # END redeco.com.ar
 
     def _menu_type_to_menu(self, menu_type_hash):
         menu = Menu(
