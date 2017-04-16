@@ -828,16 +828,13 @@ class Command(BaseCommand):
         """Con queries actualiza las fuentes (src) de las imagenes en los campos summary y text de Article."""
         queries = []
         fields = ['summary', 'text']
-        # 2734 / 2805 (97,5%)
-        nv_query = "UPDATE articles_article SET {} = REPLACE({}, '<img src=\"http://www.redeco.com.ar/nv/', '<img src=\"/media/');"
-        # 2805 (2,4%) son img con otros atributos antes del src, se reemplaza solo el src. # 2734 + 67 + 4(descarte)=28015
-        nv_query_2 = "UPDATE articles_article SET {} = REPLACE({}, 'src=\"http://www.redeco.com.ar/nv/', 'src=\"/media/') WHERE {} LIKE '%%<img%%src=\"http://www.redeco.com.ar/nv/%%';"
-        # 3988 imgs tienen src="images/...", (de las cuales 132 tienen atributos antes del src)
+        # 2805
+        nv_query = "UPDATE articles_article SET {} = REPLACE({}, 'src=\"http://www.redeco.com.ar/nv/', 'src=\"/media/');"
+        # 3988
         image_query = "UPDATE articles_article SET {} = REPLACE({}, 'src=\"images/', 'src=\"/media/images/');"
         # execute for summary and text
         for field in fields:
             queries.append(nv_query.format(field, field))
-            queries.append(nv_query_2.format(field, field, field))
             queries.append(image_query.format(field, field))
         for query in queries:
             self._raw_sqlite_execute(query)
