@@ -180,6 +180,10 @@ class Command(BaseCommand):
         print "-> {} Imagenes de articulos".format(article_images_count)
         print "-> {} Imagenes como contenido relacionado".format(related_count)
         self._time_from(start)
+        # fix img tags sources src="http://www.redeco.com.ar/nv" -> src="/media/"
+        self._fix_img_src()
+        print "-> src de <img/>s ajustado"
+        self._time_from(start)
         
         #close mysql connection
         cnx.close()
@@ -820,6 +824,20 @@ class Command(BaseCommand):
             else: # www.redeco.com.ar/ana/ www.redeco.com.ar/opinion/ se descartan
                 return None
         return None # 1%, src externos
+
+    def _fix_img_src(self):
+        """Con queries actualiza las fuentes (src) de las imagenes en los campos summary y text de Article."""
+        queries = []
+        # 2734 / 2805 (97,5%)
+        main_query = "UPDATE articles_article SET {} = REPLACE({}, '<img src=\"http://www.redeco.com.ar/nv/', '<img src=\"/media/');"
+        # 2805 (2,4%) son img con otros atributos antes del src, se reemplaza solo el src. # 2734 + 67 + 4(descarte)=28015
+        second_query = "UPDATE articles_article SET {} = REPLACE({}, 'src=\"http://www.redeco.com.ar/nv/', 'src=\"/media/') WHERE {} LIKE '%%<img%%src=\"http://www.redeco.com.ar/nv/%%';"
+        fields = ['summary', 'text']
+        for field in fields:
+            queries.append(main_query.format(field, field))
+            queries.append(second_query.format(field, field, field))
+        for query in queries:
+            self._raw_sqlite_execute(query)
 
     # END redeco.com.ar
 
