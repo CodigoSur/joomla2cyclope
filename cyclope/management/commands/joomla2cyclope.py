@@ -4,6 +4,7 @@ import pymysql
 import re
 from cyclope.models import SiteSettings, RelatedContent, Menu, MenuItem
 from cyclope.apps.articles.models import Article
+from cyclope.apps.staticpages.models import HTMLBlock
 from cyclope.core.collections.models import Collection, Category, Categorization
 from django.contrib.contenttypes.models import ContentType
 from cyclope.apps.medialibrary.models import Picture
@@ -161,7 +162,9 @@ class Command(BaseCommand):
         print "-> {} Categorias migradas de Tags Joomla".format(tags_count)
         self._time_from(start)
 
-        print "-> Migrando articulos... (toma tiempo, con cafe)"
+        htmls_count = self._fetch_modules(cnx)
+        print "-> {} Bloques HTML migrados de Modulos Joomla".format(htmls_count)
+
         articles_count, articles_images, articles_categorizations, img_success = self._fetch_content(cnx, nlimit, offset)
         print "-> {} Articulos migrados".format(articles_count)
         self._time_from(start)
@@ -448,6 +451,22 @@ class Command(BaseCommand):
         # resetear tree ids
         MenuItem.tree.rebuild()
         return MenuItem.objects.count()
+
+    def _fetch_modules(self, cnx):
+        """migrate joomla modules as cyclope external contents"""
+        fields = ('id', 'title', 'note', 'content', 'published', 'publish_up')
+        # mod_custom is the equivalent to HTMLBlock
+        query = "SELECT {} FROM {}modules".format(fields, self.table_prefix)
+        query = self._clean_tuple(query)
+        query += " WHERE module = 'mod_custom'"
+        cursor = cnx.cursor()
+        cursor.execute(query)
+        blocks = []
+        for block_hash in cursor:
+            block = self._module_to_html_block(block_hash)
+            blocks.append(block)
+        HTMLBlock.objects.bulk_create(blocks)
+        return HTMLBlock.objects.count()
 
     # HELPERS
 
@@ -841,6 +860,15 @@ class Command(BaseCommand):
 
     # END redeco.com.ar
 
+    def _module_to_html_block(self, block_hash):
+        """joomla module to cyclope HTMLBlock mapping
+                fields = ('id', 'title', 'note', 'content', 'published', 'publish_up')"""
+        block = HTMLBlock(
+            name = block_hash['title'],
+            text = block_hash['content'],
+        )
+        return block
+
     def _menu_type_to_menu(self, menu_type_hash):
         menu = Menu(
             id = menu_type_hash['id'],
@@ -893,3 +921,4 @@ class Command(BaseCommand):
             category_id = int(link_category_id)
             return self._category_content_type, category_id
         return None, None
+
