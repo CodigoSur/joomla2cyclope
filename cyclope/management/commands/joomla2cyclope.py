@@ -25,7 +25,7 @@ class Command(BaseCommand):
     help = """
     Migrates a site in Joomla to CyclopeCMS.
 
-    Usage: (cyclope_workenv)$~ python manage.py joomla2cyclope --server localhost --database REDECO_JOOMLA --user root --password NEW_PASSWORD --prefix wiphala_
+    Usage: (cyclope_workenv)$ python manage.py joomla2cyclope --server localhost --database REDECO_JOOMLA --user root --password NEW_PASSWORD --prefix wiphala_
 
     Required params are server host name, database name and database user and password.
     Optional params are joomla's table prefix.
@@ -129,8 +129,8 @@ class Command(BaseCommand):
         if offset and not nlimit:
             raise Exception("To specify an offset, the nlimit must be supplied too.")
 
-        self._category_content_type = ContentType.objects.get(name='category').pk
-        self._article_content_type = ContentType.objects.get(name='article').pk
+        self._category_content_type = ContentType.objects.get(model='category').pk
+        self._article_content_type = ContentType.objects.get(model='article').pk
 
         # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
@@ -340,10 +340,13 @@ class Command(BaseCommand):
         return categorization_count
 
     def _create_images(self, images):
-        images = [image[0] for image in images if image] # FIXME
-        # massive picture creation
+        """ massive picture creation """
         pictures = []
-        for image_hash in images:
+        for image in images:
+            if not image:
+                continue
+            else:
+                image_hash = image[0]
             picture = self._image_to_picture(image_hash)
             picture.description = self._pic_info_to_description(image_hash['article_id'], image_hash['image_type'])
             pictures.append(picture)
@@ -367,9 +370,8 @@ class Command(BaseCommand):
         """for bulk picture creation we treat here duplicate pictures slugs.
            since we are using article id and img src for slugs, duplicate slugs are really duplicate pictures,
            so we just remove them. there could be other strategies whenever it makes sense.
-           therefore we groupi pictures indexes by slug (there is no pk yet), 
+           therefore we group pictures indexes by slug (there is no pk yet), 
            removing all but the first of each group (original one).
-           using collections.Counter is supposed to perform O(n).
            """
         # count slugs appearing more than once
         duplicate_slugs = [slug for slug, count in Counter([pic.slug for pic in pictures]).items() if count > 1]
@@ -379,7 +381,6 @@ class Command(BaseCommand):
         for key in slush.iterkeys(): slush[key]=[]
         for i, pic in enumerate(pictures):
             if pic.slug in duplicate_slugs:
-                # remove from list immediately, before list indexes are updated FIXME
                 if slush[pic.slug]:
                     pictures.pop(i)
                 else:
@@ -731,7 +732,6 @@ class Command(BaseCommand):
         user.set_password(password)
         return user
 
-
     def _module_to_html_block(self, block_hash):
         """joomla module to cyclope HTMLBlock mapping
                 fields = ('id', 'title', 'note', 'content', 'published', 'publish_up')"""
@@ -758,7 +758,7 @@ class Command(BaseCommand):
             menu_id = menu_id,
             name = menu_hash['title'],
             site_home = menu_hash['home']==1,
-            url = menu_hash['path'], # TODO slugify(path), alias not unique
+            url = menu_hash['path'], # alias not unique
             active = menu_hash['published']==1,
             persistent_layout = False,
             lft = menu_hash['lft'],
