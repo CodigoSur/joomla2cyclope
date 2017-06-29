@@ -25,7 +25,7 @@ class Command(BaseCommand):
     help = """
     Migrates a site in Joomla to CyclopeCMS.
 
-    Usage: (cyclope_workenv)$~ python manage.py joomla2cyclope --server localhost --database REDECO_JOOMLA --user root --password NEW_PASSWORD --prefix wiphala_
+    Usage: (cyclope_workenv)$ python manage.py joomla2cyclope --server localhost --database REDECO_JOOMLA --user root --password NEW_PASSWORD --prefix wiphala_
 
     Required params are server host name, database name and database user and password.
     Optional params are joomla's table prefix.
@@ -102,6 +102,12 @@ class Command(BaseCommand):
             default=None,
             help='Make Content query return results starting from this row number.'
         ),
+        make_option('--plain',
+            action='store_true',
+            dest='plain',
+            default=False,
+            help='Strip article\'s contents HTML markup into plain text',
+        ),
     )
     
     # CLASS CONSTANTS
@@ -122,15 +128,16 @@ class Command(BaseCommand):
         
         self.table_prefix = options['prefix']
         self.joomla_password = options['joomla_password']
-        self.devel_url = options['devel'] # FIXME
+        self.devel_url = options['devel']
+        self.strip_html = options['plain']
 
         nlimit = options['limit']
         offset = options['offset']
         if offset and not nlimit:
             raise Exception("To specify an offset, the nlimit must be supplied too.")
 
-        self._category_content_type = ContentType.objects.get(name='category').pk
-        self._article_content_type = ContentType.objects.get(name='article').pk
+        self._category_content_type = ContentType.objects.get(model='category').pk
+        self._article_content_type = ContentType.objects.get(model='article').pk
 
         # MySQL connection
         cnx = self._mysql_connection(options['server'], options['db'], options['user'], options['password'])
@@ -252,6 +259,7 @@ class Command(BaseCommand):
 
     def _create_collections(self):
         """Creates Collections infering them from Categories extensions."""
+        Collection.objects.all().delete()
         contenidos = Collection.objects.create(id=1, name='Contenidos')
         contenidos.content_types = [ContentType.objects.get(model='article')]
         contenidos.save()
@@ -345,10 +353,13 @@ class Command(BaseCommand):
         return categorization_count
 
     def _create_images(self, images):
-        images = [image[0] for image in images if image] # FIXME
-        # massive picture creation
+        """ massive picture creation """
         pictures = []
-        for image_hash in images:
+        for image in images:
+            if not image:
+                continue
+            else:
+                image_hash = image[0]
             picture = self._image_to_picture(image_hash)
             if not picture:
                 continue
@@ -374,9 +385,8 @@ class Command(BaseCommand):
         """for bulk picture creation we treat here duplicate pictures slugs.
            since we are using article id and img src for slugs, duplicate slugs are really duplicate pictures,
            so we just remove them. there could be other strategies whenever it makes sense.
-           therefore we groupi pictures indexes by slug (there is no pk yet), 
+           therefore we group pictures indexes by slug (there is no pk yet), 
            removing all but the first of each group (original one).
-           using collections.Counter is supposed to perform O(n).
            """
         # count slugs appearing more than once
         duplicate_slugs = [slug for slug, count in Counter([pic.slug for pic in pictures]).items() if count > 1]
@@ -386,7 +396,6 @@ class Command(BaseCommand):
         for key in slush.iterkeys(): slush[key]=[]
         for i, pic in enumerate(pictures):
             if pic.slug in duplicate_slugs:
-                # remove from list immediately, before list indexes are updated FIXME
                 if slush[pic.slug]:
                     pictures.pop(i)
                 else:
@@ -646,6 +655,9 @@ class Command(BaseCommand):
         if not text:
             return None
         slug = self._joomla_slugify(content['id'], content['alias'])
+        if self.strip_html:
+            summary = self._strip_html(summary)
+            text = self._strip_html(text)
         article = Article(
             id = content['id'],
             slug = slug,
@@ -886,7 +898,7 @@ class Command(BaseCommand):
             menu_id = menu_id,
             name = menu_hash['title'],
             site_home = menu_hash['home']==1,
-            url = menu_hash['path'], # TODO slugify(path), alias not unique
+            url = menu_hash['path'], # alias not unique
             active = menu_hash['published']==1,
             persistent_layout = False,
             lft = menu_hash['lft'],
@@ -922,3 +934,13 @@ class Command(BaseCommand):
             return self._category_content_type, category_id
         return None, None
 
+    def _strip_html(self, content):
+        """receive a string containing html markup and return its plain text"""
+        if content:
+            try:
+                markup = html.fromstring(content)
+                plain_text = markup.text_content()
+                return plain_text
+            except:
+                pass
+        return u''
