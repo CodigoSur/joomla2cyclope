@@ -102,6 +102,12 @@ class Command(BaseCommand):
             default=None,
             help='Make Content query return results starting from this row number.'
         ),
+        make_option('--plain',
+            action='store_true',
+            dest='plain',
+            default=False,
+            help='Strip article\'s contents HTML markup into plain text',
+        ),
     )
     
     # CLASS CONSTANTS
@@ -122,7 +128,8 @@ class Command(BaseCommand):
         
         self.table_prefix = options['prefix']
         self.joomla_password = options['joomla_password']
-        self.devel_url = options['devel'] # FIXME
+        self.devel_url = options['devel']
+        self.strip_html = options['plain']
 
         nlimit = options['limit']
         offset = options['offset']
@@ -247,6 +254,7 @@ class Command(BaseCommand):
 
     def _create_collections(self):
         """Creates Collections infering them from Categories extensions."""
+        Collection.objects.all().delete()
         contenidos = Collection.objects.create(id=1, name='Contenidos')
         contenidos.content_types = [ContentType.objects.get(model='article')]
         contenidos.save()
@@ -637,6 +645,9 @@ class Command(BaseCommand):
     def _content_to_article(self, content):
         """Instances an Article object from a Content hash."""
         slug = self._joomla_slugify(content['id'], content['alias'])
+        text = self._joomla_content(content)
+        if self.strip_html:
+            text = self._strip_html(text)
         article = Article(
             id = content['id'],
             slug = slug,
@@ -645,7 +656,7 @@ class Command(BaseCommand):
             modification_date = content['modified'],
             date = content['created'],
             published = content['state']==1, # 0=unpublished, 1=published, -1=archived, -2=marked for deletion
-            text =  self._joomla_content(content),
+            text = text,
             user_id = content['created_by']
         )
         return article
@@ -794,3 +805,13 @@ class Command(BaseCommand):
             return self._category_content_type, category_id
         return None, None
 
+    def _strip_html(self, content):
+        """receive a string containing html markup and return its plain text"""
+        if content:
+            try:
+                markup = html.fromstring(content)
+                plain_text = markup.text_content()
+                return plain_text
+            except:
+                pass
+        return u''
